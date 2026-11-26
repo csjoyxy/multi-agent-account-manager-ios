@@ -4066,3 +4066,226 @@ body,
   border-color: var(--border-strong);
   color: var(--text-main);
 }
+
+.mobile-shell {
+  position: relative;
+}
+
+.mobile-tab-group-icon {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+}
+
+.mobile-tab-group-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.mobile-tab-group-icon .warn-dot {
+  top: -2px;
+  right: -3px;
+  width: 6px;
+  height: 6px;
+}
+
+.mobile-group-split {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mobile-group-list-pane {
+  width: 100%;
+  min-width: 0;
+  flex: 1;
+  border-right: none;
+}
+
+.mobile-group-chat-pane {
+  width: 100%;
+  min-width: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mobile-group-split[data-subview="list"] .mobile-group-chat-pane {
+  display: none;
+}
+
+.mobile-group-split[data-subview="chat"] .mobile-group-list-pane {
+  display: none;
+}
+
+.mobile-group-back-btn {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.mobile-shell > .inline-modal {
+  position: fixed;
+  inset: max(env(safe-area-inset-top, 0px), 32px) 0 env(safe-area-inset-bottom, 0px) 0;
+  z-index: 120;
+  padding: 14px 12px 24px;
+  align-items: center;
+}
+
+.mobile-shell > .inline-modal .modal-card {
+  width: min(460px, 100%);
+}
+
+.mobile-shell .group-row .row-ops > .action-icon-btn {
+  opacity: 1;
+}
+
+.mobile-shell .group-chat-header {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px 12px 9px;
+}
+
+.mobile-shell .group-member-bar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin-top: 6px;
+  padding-bottom: 2px;
+}
+
+.mobile-shell .group-member-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-shell .member-category-group {
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+
+.mobile-shell .group-header-actions {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  gap: 6px;
+  padding-bottom: 2px;
+}
+
+.mobile-shell .group-header-actions::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-shell .group-header-actions .btn {
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.mobile-shell .group-messages {
+  padding: 12px;
+  gap: 12px;
+}
+
+.mobile-shell .group-msg {
+  max-width: 94%;
+}
+
+.mobile-shell .group-bubble .group-save-ctx-wrap {
+  position: static;
+  left: auto;
+  right: auto;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+  padding: 0;
+  margin-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mobile-shell .group-pin-icon-btn[data-tooltip]::after {
+  display: none;
+}
+
+.mobile-shell .group-auth-card,
+.mobile-shell .group-error-box {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+.mobile-shell .group-error-ops {
+  flex-wrap: wrap;
+}
+
+.mobile-shell .group-composer {
+  padding: 8px 12px 10px;
+  gap: 6px;
+}
+
+.mobile-shell .group-target-chips.grouped {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+
+.mobile-shell .group-target-chips.grouped::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-shell .target-category-group,
+.mobile-shell .target-category-items,
+.mobile-shell .group-target-chip {
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+
+.mobile-shell .group-mention-menu {
+  right: 0;
+}
+
+.mobile-shell .group-chat-input,
+.mobile-shell .modal-input,
+.mobile-shell .modal-textarea,
+.mobile-shell .role-input,
+.mobile-shell .compact-cookie-textarea {
+  font-size: 16px;
+}
+
+@media (min-width: 768px) {
+  .mobile-group-split {
+    flex-direction: row;
+  }
+
+  .mobile-group-split .mobile-group-list-pane {
+    display: flex !important;
+    width: 300px;
+    flex: 0 0 300px;
+    border-right: 1px solid var(--border);
+  }
+
+  .mobile-group-split .mobile-group-chat-pane {
+    display: flex !important;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .mobile-group-back-btn {
+    display: none !important;
+  }
+}
+

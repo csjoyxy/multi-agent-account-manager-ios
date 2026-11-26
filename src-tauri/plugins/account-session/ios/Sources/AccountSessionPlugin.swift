@@ -57,6 +57,41 @@ private struct FetchTextArgs: Decodable {
   let accept: String?
 }
 
+private struct EnsureGroupWebviewArgs: Decodable {
+  let providerId: String
+  let uuid: String
+  let entryUrl: String
+  let allowedHosts: [String]
+  let proxyUrl: String?
+  let timezone: String?
+  let timezoneInitScript: String?
+  let autoApprove: Bool
+  let backgroundRafJs: String
+  let netHookJs: String
+  let viewInstanceId: UInt64
+}
+
+private struct EvalGroupWebviewArgs: Decodable {
+  let providerId: String
+  let uuid: String
+  let js: String
+}
+
+private struct GroupWebviewTargetArgs: Decodable {
+  let providerId: String
+  let uuid: String
+}
+
+private struct NavigateGroupWebviewArgs: Decodable {
+  let providerId: String
+  let uuid: String
+  let url: String
+}
+
+private struct SetAutoApproveArgs: Decodable {
+  let autoApprove: Bool
+}
+
 private struct CapabilitiesResult: Encodable {
   let multiProfileSupported: Bool
   let profileNames: [String]
@@ -65,6 +100,25 @@ private struct CapabilitiesResult: Encodable {
 private struct FetchTextResult: Encodable {
   let status: UInt16
   let body: String
+}
+
+private struct EnsureGroupWebviewResult: Encodable {
+  let viewInstanceId: UInt64
+  let url: String
+  let loggedOut: Bool
+}
+
+private struct EvalGroupWebviewResult: Encodable {
+  let exists: Bool
+  let valueJson: String?
+  let url: String?
+  let error: String?
+}
+
+private struct GroupWebviewStateResult: Encodable {
+  let exists: Bool
+  let viewInstanceId: UInt64
+  let url: String?
 }
 
 @_cdecl("init_plugin_account_session")
@@ -84,15 +138,8 @@ public class AccountSessionPlugin: Plugin {
   }
 
   @objc public func checkCapabilities(_ invoke: Invoke) {
-    DispatchQueue.main.async {
-      if #available(iOS 17.0, *) {
-        WKWebsiteDataStore.fetchAllDataStoreIdentifiers { uuids in
-          let names = uuids.map { $0.uuidString.lowercased() }
-          invoke.resolve(CapabilitiesResult(multiProfileSupported: true, profileNames: names))
-        }
-      } else {
-        invoke.resolve(CapabilitiesResult(multiProfileSupported: false, profileNames: []))
-      }
+    IosProfileStoreManager.shared.fetchAllProfileIdentifiers { names in
+      invoke.resolve(CapabilitiesResult(multiProfileSupported: true, profileNames: names))
     }
   }
 
@@ -114,10 +161,6 @@ public class AccountSessionPlugin: Plugin {
         viewInstanceId: args.viewInstanceId,
         isColdStart: args.isColdStart
       )
-      guard #available(iOS 17.0, *) else {
-        invoke.reject("多账号隔离需要 iOS 17.0 及以上系统")
-        return
-      }
       guard let parsedUuid = UUID(uuidString: spec.uuid) else {
         invoke.reject("账号资料 UUID 无效")
         return
@@ -148,8 +191,7 @@ public class AccountSessionPlugin: Plugin {
         }
 
         if spec.isColdStart {
-          WKWebsiteDataStore.fetchAllDataStoreIdentifiers { uuids in
-            let found = uuids.contains { $0 == parsedUuid }
+          IosProfileStoreManager.shared.hasPersistedProfile(uuid: parsedUuid) { found in
             if !found {
               invoke.reject("已提交账号的 Profile 不存在")
               return
@@ -194,10 +236,6 @@ public class AccountSessionPlugin: Plugin {
     do {
       let args = try invoke.parseArgs(DeleteProfileArgs.self)
       let normUuid = args.uuid.lowercased()
-      guard #available(iOS 17.0, *) else {
-        invoke.resolve()
-        return
-      }
       guard let parsedUuid = UUID(uuidString: normUuid) else {
         invoke.reject("账号资料 UUID 无效")
         return
@@ -207,17 +245,12 @@ public class AccountSessionPlugin: Plugin {
           invoke.reject("目标 Profile 视图尚未销毁")
           return
         }
-        WKWebsiteDataStore.fetchAllDataStoreIdentifiers { uuids in
-          guard uuids.contains(parsedUuid) else {
+        IosGroupWebViewPool.shared.destroyAllEntriesForUuid(normUuid)
+        IosProfileStoreManager.shared.removeProfile(uuid: parsedUuid) { err in
+          if let err = err {
+            invoke.reject("删除 iOS 隔离资料失败: \(err.localizedDescription)")
+          } else {
             invoke.resolve()
-            return
-          }
-          WKWebsiteDataStore.remove(forIdentifier: parsedUuid) { err in
-            if let err = err {
-              invoke.reject("删除 iOS 隔离资料失败: \(err.localizedDescription)")
-            } else {
-              invoke.resolve()
-            }
           }
         }
       }
@@ -229,10 +262,6 @@ public class AccountSessionPlugin: Plugin {
   @objc public func copyProfileCookie(_ invoke: Invoke) {
     do {
       let args = try invoke.parseArgs(CopyProfileCookieArgs.self)
-      guard #available(iOS 17.0, *) else {
-        invoke.reject("Cookie 隔离需要 iOS 17.0 及以上系统")
-        return
-      }
       guard let parsedUuid = UUID(uuidString: args.uuid),
             let entryUrl = URL(string: args.url),
             let entryHost = entryUrl.host?.lowercased() else {
@@ -240,31 +269,28 @@ public class AccountSessionPlugin: Plugin {
         return
       }
 
-      DispatchQueue.main.async {
-        let store = WKWebsiteDataStore(forIdentifier: parsedUuid)
-        store.httpCookieStore.getAllCookies { cookies in
-          let now = Date()
-          var pairs: [String] = []
-          for cookie in cookies {
-            if let exp = cookie.expiresDate, exp <= now {
-              continue
-            }
-            let domain = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
-            if domain.isEmpty || entryHost == domain || entryHost.hasSuffix("." + domain) {
-              pairs.append("\(cookie.name)=\(cookie.value)")
-            }
+      IosProfileStoreManager.shared.getAllCookies(uuid: parsedUuid) { cookies in
+        let now = Date()
+        var pairs: [String] = []
+        for cookie in cookies {
+          if let exp = cookie.expiresDate, exp <= now {
+            continue
           }
-          if pairs.isEmpty {
-            invoke.reject("该账号暂无可复制的 Cookie，请先登录")
-            return
+          let domain = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
+          if domain.isEmpty || entryHost == domain || entryHost.hasSuffix("." + domain) {
+            pairs.append("\(cookie.name)=\(cookie.value)")
           }
-          let header = pairs.joined(separator: "; ")
-          UIPasteboard.general.setItems(
-            [["public.utf8-plain-text": header]],
-            options: [.localOnly: true]
-          )
-          invoke.resolve()
         }
+        if pairs.isEmpty {
+          invoke.reject("该账号暂无可复制的 Cookie，请先登录")
+          return
+        }
+        let header = pairs.joined(separator: "; ")
+        UIPasteboard.general.setItems(
+          [["public.utf8-plain-text": header]],
+          options: [.localOnly: true]
+        )
+        invoke.resolve()
       }
     } catch {
       invoke.reject("复制 Cookie 失败: \(error.localizedDescription)")
@@ -274,10 +300,6 @@ public class AccountSessionPlugin: Plugin {
   @objc public func importProfileCookies(_ invoke: Invoke) {
     do {
       let args = try invoke.parseArgs(ImportProfileCookiesArgs.self)
-      guard #available(iOS 17.0, *) else {
-        invoke.reject("导入 Cookie 需要 iOS 17.0 及以上系统")
-        return
-      }
       guard let parsedUuid = UUID(uuidString: args.uuid),
             let defaultUrl = URL(string: args.url) else {
         invoke.reject("账号资料标识或服务地址无效")
@@ -285,7 +307,6 @@ public class AccountSessionPlugin: Plugin {
       }
 
       DispatchQueue.main.async {
-        let store = WKWebsiteDataStore(forIdentifier: parsedUuid)
         var parsedCookies: [HTTPCookie] = []
         for header in args.cookies {
           let trimmed = header.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -299,19 +320,161 @@ public class AccountSessionPlugin: Plugin {
           return
         }
 
-        let group = DispatchGroup()
-        for cookie in parsedCookies {
-          group.enter()
-          store.httpCookieStore.setCookie(cookie) {
-            group.leave()
-          }
-        }
-        group.notify(queue: .main) {
+        IosGroupWebViewPool.shared.destroyAllEntriesForUuid(parsedUuid.uuidString.lowercased())
+        IosProfileStoreManager.shared.setCookies(uuid: parsedUuid, cookies: parsedCookies) {
           invoke.resolve()
         }
       }
     } catch {
       invoke.reject("导入 Cookie 失败: \(error.localizedDescription)")
+    }
+  }
+
+  @objc public func ensureGroupWebview(_ invoke: Invoke) {
+    do {
+      let args = try invoke.parseArgs(EnsureGroupWebviewArgs.self)
+      let spec = EnsureGroupWebviewSpec(
+        providerId: args.providerId,
+        uuid: args.uuid.lowercased(),
+        entryUrl: args.entryUrl,
+        allowedHosts: args.allowedHosts,
+        proxyUrl: args.proxyUrl,
+        timezone: args.timezone,
+        timezoneInitScript: args.timezoneInitScript,
+        autoApprove: args.autoApprove,
+        backgroundRafJs: args.backgroundRafJs,
+        netHookJs: args.netHookJs,
+        requestedViewInstanceId: args.viewInstanceId
+      )
+      DispatchQueue.main.async {
+        IosGroupWebViewPool.shared.ensureGroupWebView(spec: spec) { result in
+          switch result {
+          case .success(let outcome):
+            invoke.resolve(
+              EnsureGroupWebviewResult(
+                viewInstanceId: outcome.viewInstanceId,
+                url: outcome.url,
+                loggedOut: outcome.loggedOut
+              )
+            )
+          case .failure(let err):
+            invoke.reject(err.message)
+          }
+        }
+      }
+    } catch {
+      invoke.reject("解析群聊视图参数失败: \(error.localizedDescription)")
+    }
+  }
+
+  @objc public func evalGroupWebviewJs(_ invoke: Invoke) {
+    do {
+      let args = try invoke.parseArgs(EvalGroupWebviewArgs.self)
+      DispatchQueue.main.async {
+        IosGroupWebViewPool.shared.evaluateJs(
+          providerId: args.providerId,
+          uuid: args.uuid.lowercased(),
+          js: args.js
+        ) { outcome in
+          invoke.resolve(
+            EvalGroupWebviewResult(
+              exists: outcome.exists,
+              valueJson: outcome.valueJson,
+              url: outcome.url,
+              error: outcome.error
+            )
+          )
+        }
+      }
+    } catch {
+      invoke.reject("解析脚本执行参数失败")
+    }
+  }
+
+  @objc public func getGroupWebviewState(_ invoke: Invoke) {
+    do {
+      let args = try invoke.parseArgs(GroupWebviewTargetArgs.self)
+      DispatchQueue.main.async {
+        let state = IosGroupWebViewPool.shared.getState(
+          providerId: args.providerId,
+          uuid: args.uuid.lowercased()
+        )
+        invoke.resolve(
+          GroupWebviewStateResult(
+            exists: state.exists,
+            viewInstanceId: state.viewInstanceId,
+            url: state.url
+          )
+        )
+      }
+    } catch {
+      invoke.reject("获取群聊视图状态参数无效")
+    }
+  }
+
+  @objc public func navigateGroupWebview(_ invoke: Invoke) {
+    do {
+      let args = try invoke.parseArgs(NavigateGroupWebviewArgs.self)
+      guard let targetUrl = URL(string: args.url),
+            targetUrl.scheme?.lowercased() == "https" else {
+        invoke.reject("目标地址无效")
+        return
+      }
+      DispatchQueue.main.async {
+        if IosGroupWebViewPool.shared.navigate(
+          providerId: args.providerId,
+          uuid: args.uuid.lowercased(),
+          targetUrl: targetUrl
+        ) {
+          invoke.resolve()
+        } else {
+          invoke.reject("目标群聊视图不存在")
+        }
+      }
+    } catch {
+      invoke.reject("导航群聊视图参数无效")
+    }
+  }
+
+  @objc public func reloadGroupWebview(_ invoke: Invoke) {
+    do {
+      let args = try invoke.parseArgs(GroupWebviewTargetArgs.self)
+      DispatchQueue.main.async {
+        _ = IosGroupWebViewPool.shared.reload(
+          providerId: args.providerId,
+          uuid: args.uuid.lowercased()
+        )
+        invoke.resolve()
+      }
+    } catch {
+      invoke.reject("刷新群聊视图参数无效")
+    }
+  }
+
+  @objc public func discardGroupWebview(_ invoke: Invoke) {
+    do {
+      let args = try invoke.parseArgs(GroupWebviewTargetArgs.self)
+      DispatchQueue.main.async {
+        IosGroupWebViewPool.shared.discardEntry(
+          providerId: args.providerId,
+          uuid: args.uuid.lowercased()
+        )
+        invoke.resolve()
+      }
+    } catch {
+      invoke.reject("回收群聊视图参数无效")
+    }
+  }
+
+  @objc public func setAutoApprove(_ invoke: Invoke) {
+    do {
+      let args = try invoke.parseArgs(SetAutoApproveArgs.self)
+      DispatchQueue.main.async {
+        IosGroupWebViewPool.shared.setAutoApprove(args.autoApprove)
+        invoke.resolve()
+      }
+    } catch {
+      invoke.reject("更新自动审批参数无效")
     }
   }
 

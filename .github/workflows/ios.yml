@@ -1,0 +1,156 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "src/**"
+      - "src-tauri/**"
+      - "scripts/build-ios-ipa.sh"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "src-tauri/**"
+      - "scripts/build-ios-ipa.sh"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish or update GitHub Release with iOS IPA
+        type: boolean
+        default: false
+        required: false
+      release_tag:
+        description: Optional Release tag (e.g. v0.1.10-ios.1; defaults to v<tauri.conf.json version>)
+        type: string
+        default: ""
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  ios:
+    name: iOS 16.0+ (Unsigned IPA)
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+      - name: Ensure iOS CLI dependencies
+        run: |
+          for pkg in xcodegen libimobiledevice cocoapods; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
+      - run: npm ci
+      - name: Build unsigned iOS IPA (iOS 16.0+)
+        run: bash scripts/build-ios-ipa.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios-unsigned-ipa
+          path: src-tauri/target/ios/account-manager-ios-unsigned.ipa
+          if-no-files-found: error
+      - name: Publish iOS IPA to GitHub Release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+        run: |
+          ipa_path="src-tauri/target/ios/account-manager-ios-unsigned.ipa"
+          cfg_version=$(jq -r '.version' src-tauri/tauri.conf.json)
+          if [ -n "${INPUT_TAG}" ]; then
+            tag="${INPUT_TAG}"
+            version=$(printf '%s' "$tag" | sed 's/^[vV]//')
+          else
+            version="$cfg_version"
+            tag="v${version}"
+          fi
+
+          pub_dir="$RUNNER_TEMP/ios-publish"
+          mkdir -p "$pub_dir"
+          cp "$ipa_path" "$pub_dir/account-manager-ios-unsigned.ipa"
+
+          ipa_sha=$(shasum -a 256 "$pub_dir/account-manager-ios-unsigned.ipa" | awk '{print $1}')
+          ipa_size=$(stat -f%z "$pub_dir/account-manager-ios-unsigned.ipa")
+          base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
+          pub_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          notes=$(git log -n 10 --pretty=format:"- %s" 2>/dev/null || echo "iOS Release ${tag}")
+
+          # Preserve existing platform entries in latest.json if updating an existing release
+          existing_json="$pub_dir/existing-latest.json"
+          if gh release download "$tag" -p "latest.json" -O "$existing_json" >/dev/null 2>&1; then
+            jq \
+              --arg version "$version" \
+              --arg notes "$notes" \
+              --arg pub_date "$pub_date" \
+              --arg release_page_url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}" \
+              --arg ipa_url "${base_url}/account-manager-ios-unsigned.ipa" \
+              --arg ipa_sha "$ipa_sha" \
+              --argjson ipa_size "$ipa_size" \
+              '.version = $version
+               | .pub_date = $pub_date
+               | .release_page_url = $release_page_url
+               | .platforms.ios = {
+                   url: $ipa_url,
+                   sha256: $ipa_sha,
+                   filename: "account-manager-ios-unsigned.ipa",
+                   size: $ipa_size
+                 }' "$existing_json" > "$pub_dir/latest.json"
+          else
+            jq -n \
+              --arg version "$version" \
+              --arg notes "$notes" \
+              --arg pub_date "$pub_date" \
+              --arg release_page_url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}" \
+              --arg ipa_url "${base_url}/account-manager-ios-unsigned.ipa" \
+              --arg ipa_sha "$ipa_sha" \
+              --argjson ipa_size "$ipa_size" \
+              '{
+                version: $version,
+                notes: $notes,
+                pub_date: $pub_date,
+                release_page_url: $release_page_url,
+                platforms: {
+                  ios: {
+                    url: $ipa_url,
+                    sha256: $ipa_sha,
+                    filename: "account-manager-ios-unsigned.ipa",
+                    size: $ipa_size
+                  }
+                }
+              }' > "$pub_dir/latest.json"
+          fi
+
+          printf '%s\n' "$notes" > "$pub_dir/release-notes.txt"
+          files=(
+            "$pub_dir/account-manager-ios-unsigned.ipa"
+            "$pub_dir/latest.json"
+          )
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --clobber
+          else
+            gh release create "$tag" "${files[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "叠号 $tag" \
+              --notes-file "$pub_dir/release-notes.txt"
+          fi

@@ -2069,7 +2069,7 @@ pub struct ProxyTestResult {
   pub message: String,
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 pub async fn test_account_proxy(target_url: &str, raw_proxy: &str) -> Result<ProxyTestResult, String> {
   let proxy_opt = parse_account_proxy(raw_proxy)?;
   let parsed_target = url::Url::parse(target_url.trim())
@@ -2144,7 +2144,7 @@ pub async fn test_account_proxy(target_url: &str, raw_proxy: &str) -> Result<Pro
   }
 }
 
-#[cfg(not(desktop))]
+#[cfg(not(any(desktop, target_os = "ios")))]
 #[allow(dead_code)]
 pub async fn test_account_proxy(_target_url: &str, _raw_proxy: &str) -> Result<ProxyTestResult, String> {
   Err("当前平台不支持代理测试".to_string())

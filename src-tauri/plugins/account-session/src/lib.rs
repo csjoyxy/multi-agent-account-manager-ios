@@ -318,3 +318,188 @@ pub async fn download_and_install_apk(
     .await
     .map_err(|e| e.to_string())
 }
+
+#[cfg(target_os = "ios")]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnsureIosGroupWebviewPayload {
+  pub provider_id: String,
+  pub uuid: String,
+  pub entry_url: String,
+  pub allowed_hosts: Vec<String>,
+  pub proxy_url: Option<String>,
+  pub timezone: Option<String>,
+  pub timezone_init_script: Option<String>,
+  pub auto_approve: bool,
+  pub background_raf_js: String,
+  pub net_hook_js: String,
+  pub view_instance_id: u64,
+}
+
+#[cfg(target_os = "ios")]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnsureIosGroupWebviewResponse {
+  pub view_instance_id: u64,
+  pub url: String,
+  #[serde(default)]
+  pub logged_out: bool,
+}
+
+#[cfg(target_os = "ios")]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalIosGroupWebviewResponse {
+  pub exists: bool,
+  #[serde(default)]
+  pub value_json: Option<String>,
+  #[serde(default)]
+  pub url: Option<String>,
+  #[serde(default)]
+  pub error: Option<String>,
+}
+
+#[cfg(target_os = "ios")]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IosGroupWebviewStateResponse {
+  pub exists: bool,
+  #[serde(default)]
+  pub view_instance_id: u64,
+  #[serde(default)]
+  pub url: Option<String>,
+}
+
+#[cfg(target_os = "ios")]
+pub async fn ensure_group_webview(
+  app: &AppHandle,
+  payload: EnsureIosGroupWebviewPayload,
+) -> Result<EnsureIosGroupWebviewResponse, String> {
+  let bridge = app.state::<MobileSessionBridge<tauri::Wry>>();
+  bridge
+    .0
+    .run_mobile_plugin_async("ensureGroupWebview", payload)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "ios")]
+pub async fn eval_group_webview_js(
+  app: &AppHandle,
+  provider_id: &str,
+  uuid: &str,
+  js: &str,
+) -> Result<EvalIosGroupWebviewResponse, String> {
+  let bridge = app.state::<MobileSessionBridge<tauri::Wry>>();
+  bridge
+    .0
+    .run_mobile_plugin_async(
+      "evalGroupWebviewJs",
+      serde_json::json!({
+        "providerId": provider_id,
+        "uuid": uuid,
+        "js": js,
+      }),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "ios")]
+pub async fn get_group_webview_state(
+  app: &AppHandle,
+  provider_id: &str,
+  uuid: &str,
+) -> Result<IosGroupWebviewStateResponse, String> {
+  let bridge = app.state::<MobileSessionBridge<tauri::Wry>>();
+  bridge
+    .0
+    .run_mobile_plugin_async(
+      "getGroupWebviewState",
+      serde_json::json!({
+        "providerId": provider_id,
+        "uuid": uuid,
+      }),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "ios")]
+pub async fn navigate_group_webview(
+  app: &AppHandle,
+  provider_id: &str,
+  uuid: &str,
+  url: &str,
+) -> Result<(), String> {
+  let bridge = app.state::<MobileSessionBridge<tauri::Wry>>();
+  bridge
+    .0
+    .run_mobile_plugin_async::<serde_json::Value>(
+      "navigateGroupWebview",
+      serde_json::json!({
+        "providerId": provider_id,
+        "uuid": uuid,
+        "url": url,
+      }),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "ios")]
+pub async fn reload_group_webview(
+  app: &AppHandle,
+  provider_id: &str,
+  uuid: &str,
+) -> Result<(), String> {
+  let bridge = app.state::<MobileSessionBridge<tauri::Wry>>();
+  bridge
+    .0
+    .run_mobile_plugin_async::<serde_json::Value>(
+      "reloadGroupWebview",
+      serde_json::json!({
+        "providerId": provider_id,
+        "uuid": uuid,
+      }),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "ios")]
+pub async fn discard_group_webview(
+  app: &AppHandle,
+  provider_id: &str,
+  uuid: &str,
+) -> Result<(), String> {
+  let bridge = app.state::<MobileSessionBridge<tauri::Wry>>();
+  bridge
+    .0
+    .run_mobile_plugin_async::<serde_json::Value>(
+      "discardGroupWebview",
+      serde_json::json!({
+        "providerId": provider_id,
+        "uuid": uuid,
+      }),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "ios")]
+pub async fn set_auto_approve(app: &AppHandle, auto_approve: bool) -> Result<(), String> {
+  let bridge = app.state::<MobileSessionBridge<tauri::Wry>>();
+  bridge
+    .0
+    .run_mobile_plugin_async::<serde_json::Value>(
+      "setAutoApprove",
+      serde_json::json!({ "autoApprove": auto_approve }),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}

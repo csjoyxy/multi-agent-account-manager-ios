@@ -2,7 +2,7 @@
 set -euo pipefail
 
 unset HOMEBREW_ASK
-export IPHONEOS_DEPLOYMENT_TARGET="17.0"
+export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-16.0}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -33,19 +33,36 @@ if xcrun simctl list runtimes 2>/dev/null | grep -qi 'iOS'; then
   HAS_IOS_RUNTIME=1
 fi
 
-python3 - "$ROOT_DIR/src-tauri/gen/apple/project.yml" "$HAS_IOS_RUNTIME" <<'PY'
+python3 - "$ROOT_DIR/src-tauri/gen/apple/project.yml" "$HAS_IOS_RUNTIME" "$IPHONEOS_DEPLOYMENT_TARGET" <<'PY'
 import pathlib
+import re
 import sys
 
 path = pathlib.Path(sys.argv[1])
 has_runtime = sys.argv[2] == "1"
+deploy_target = sys.argv[3]
 text = path.read_text(encoding="utf-8")
 orig = text
 
-if "- sdk: Network.framework" not in text:
-    anchor = "      - sdk: WebKit.framework\n"
-    if anchor in text:
-        text = text.replace(anchor, anchor + "      - sdk: Network.framework\n", 1)
+text = re.sub(
+    r'(^\s*iOS:\s*)["\']?\d+\.\d+["\']?\s*$',
+    rf'\g<1>"{deploy_target}"',
+    text,
+    flags=re.MULTILINE,
+)
+text = re.sub(
+    r'(^\s*IPHONEOS_DEPLOYMENT_TARGET:\s*)["\']?\d+\.\d+["\']?\s*$',
+    rf'\g<1>"{deploy_target}"',
+    text,
+    flags=re.MULTILINE,
+)
+
+for fw in ("CoreFoundation.framework", "Security.framework", "Network.framework"):
+    entry = f"      - sdk: {fw}\n"
+    if entry not in text:
+        anchor = "      - sdk: WebKit.framework\n"
+        if anchor in text:
+            text = text.replace(anchor, anchor + entry, 1)
 
 text = text.replace("      PRODUCT_NAME: 叠号\n", "      PRODUCT_NAME: AccountManager\n")
 if "        CFBundleDisplayName:" not in text:
@@ -122,7 +139,7 @@ SKIP_TAURI_XCODE_SCRIPT=1 xcodebuild \
   CODE_SIGNING_REQUIRED=NO \
   CODE_SIGN_IDENTITY="" \
   DEVELOPMENT_TEAM="" \
-  IPHONEOS_DEPLOYMENT_TARGET=17.0 \
+  IPHONEOS_DEPLOYMENT_TARGET="$IPHONEOS_DEPLOYMENT_TARGET" \
   build
 
 APP_PATH="$(find "$BUILD_DIR" -maxdepth 1 -name '*.app' -print -quit)"
@@ -130,6 +147,7 @@ if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
   echo "未找到构建产物 .app" >&2
   exit 1
 fi
+plutil -p "$APP_PATH/Info.plist" 2>/dev/null | grep -E 'MinimumOSVersion|CFBundleShortVersionString' || true
 
 if [ "$HAS_IOS_RUNTIME" = "0" ]; then
   ICON_SRC_DIR="$ROOT_DIR/src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset"

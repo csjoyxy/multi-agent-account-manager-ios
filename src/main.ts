@@ -265,6 +265,7 @@ let modal: ModalMode = { kind: "none" };
 let optimisticSwitching: AccountKey | null = null;
 let busy = false;
 let viewMode: "provider" | "groups" = "provider";
+let mobileGroupSubView: "list" | "chat" = "list";
 let lastGroupListScroll = 0;
 let shouldAnimateModal = false;
 let modalOverlayScrollTop = 0;
@@ -340,9 +341,17 @@ function isMobilePlatform(platform: ManagerSnapshot["platform"] | undefined): bo
   return platform === "android" || platform === "ios";
 }
 
+function supportsGroupChat(platform: ManagerSnapshot["platform"] | undefined): boolean {
+  return platform !== "android";
+}
+
+function supportsLocalCliAgents(platform: ManagerSnapshot["platform"] | undefined): boolean {
+  return Boolean(platform && !isMobilePlatform(platform));
+}
+
 function syncViewModeFromSnapshot(state: ManagerSnapshot | null): void {
   if (!state) return;
-  if (isMobilePlatform(state.platform)) {
+  if (!supportsGroupChat(state.platform)) {
     viewMode = "provider";
     return;
   }
@@ -1291,25 +1300,48 @@ function formatGroupPickerHint(
   eligibleCount: number,
   ineligibleCount: number,
   selectedCount: number,
-  hasPickerContent: boolean
+  hasPickerContent: boolean,
+  allowCli = true
 ): string {
+  const extLabel = allowCli ? "API / CLI" : "OpenAI API";
   if (eligibleCount === 0 && !hasPickerContent) {
-    return "暂无可用成员，请先登录网页账号或添加 API / CLI 成员。";
+    return `暂无可用成员，请先登录网页账号或添加 ${extLabel} 成员。`;
   }
   if (ineligibleCount > 0) {
     return `已自动过滤 ${ineligibleCount} 个未登录或登录失效网页账号（已选 ${selectedCount}/30）。`;
   }
-  return `支持网页账号与 API / CLI 混合协同（已选 ${selectedCount}/30）。`;
+  return `支持网页账号与 ${extLabel} 混合协同（已选 ${selectedCount}/30）。`;
 }
 
 function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
   const platform = state.platform;
+  const isMobile = isMobilePlatform(platform);
+  const allowCli = supportsLocalCliAgents(platform);
   if (modal.kind === "none") return "";
   if (modal.kind === "update") {
     return renderUpdateModal();
   }
   if (modal.kind === "settings") {
     const saving = Boolean(modal.saving);
+    if (isMobile) {
+      return `
+        <div class="${modalOverlayClass()}" role="dialog" aria-modal="true">
+          <div class="modal-card">
+            <div class="modal-title">应用设置</div>
+            <label class="setting-row" for="modal-auto-approve-checkbox">
+              <span class="setting-label">自动审批权限请求（前台与群聊后台账号）</span>
+              <input id="modal-auto-approve-checkbox" class="setting-checkbox" type="checkbox" ${modal.autoApprove ? "checked" : ""} ${saving ? "disabled" : ""} />
+            </label>
+            <div class="modal-hint">开启后，当前打开的账号页与群聊后台保活 WebView 遇到工具授权弹窗将自动点击允许，并严格跳过删除、注销、退出登录、支付等高危操作。</div>
+            ${modal.error ? `<div id="modal-error-box" class="update-error-box" role="alert">${escapeHtml(modal.error)}</div>` : ""}
+            <div class="modal-footer">
+              <button id="modal-cancel-btn" class="btn" type="button" ${saving ? "disabled" : ""}>取消</button>
+              <button id="modal-confirm-btn" class="btn primary" type="button" ${saving ? "disabled" : ""}>${saving ? "保存中..." : "保存"}</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
     const shortcutPresets = [
       { label: "默认", val: "CommandOrControl+Shift+M" },
       { label: "Alt+Space", val: "Alt+Space" },
@@ -1380,6 +1412,10 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
         ) ?? renameAcc)
       : null;
     const cookieInfo = currentAcc ? formatCookieExpiry(currentAcc) : null;
+    const proxyHint =
+      platform === "ios"
+        ? "iOS 17+ 按账号独立走此代理；iOS 16 系统受 WebKit 限制自动回退使用系统网络 / VPN（仍可点击测试连接验证）。"
+        : "仅作用于内嵌页面；外部浏览器登录与更新检查不走此代理。";
     return `
       <div class="${modalOverlayClass()}" role="dialog" aria-modal="true">
         <div class="modal-card">
@@ -1388,11 +1424,11 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
           ${supportsProxy ? `
             <label class="modal-desc" for="modal-proxy-input">HTTP CONNECT 代理（留空使用系统网络）</label>
             <div class="proxy-input-row">
-              <input id="modal-proxy-input" class="modal-input" maxlength="512" placeholder="http://127.0.0.1:7890" value="${escapeHtml(modal.proxyDraft)}" autocomplete="off" spellcheck="false" ${saving ? "disabled" : ""} />
-              ${!isMobilePlatform(platform) ? `<button id="proxy-test-btn" class="btn mini-test-btn" type="button" ${saving || proxyTesting ? "disabled" : ""}>${proxyTesting ? "测速中..." : "测试连接"}</button>` : ""}
+              <input id="modal-proxy-input" class="modal-input" maxlength="512" placeholder="${platform === "ios" ? "http://192.168.1.2:7890" : "http://127.0.0.1:7890"}" value="${escapeHtml(modal.proxyDraft)}" autocomplete="off" spellcheck="false" ${saving ? "disabled" : ""} />
+              <button id="proxy-test-btn" class="btn mini-test-btn" type="button" ${saving || proxyTesting ? "disabled" : ""}>${proxyTesting ? "测速中..." : "测试连接"}</button>
             </div>
             ${testRes ? `<div id="proxy-test-result" class="proxy-test-box ${testRes.ok ? "ok" : "err"}">${escapeHtml(testRes.message)}</div>` : ""}
-            <div class="modal-hint">仅作用于内嵌页面；外部浏览器登录与更新检查不走此代理。</div>
+            <div class="modal-hint">${proxyHint}</div>
           ` : ""}
           <label class="modal-desc" for="modal-timezone-input">自定义时区（留空跟随系统）</label>
           <input id="modal-timezone-input" class="modal-input" maxlength="64" placeholder="IANA 时区（例如 America/New_York、Asia/Tokyo）" value="${escapeHtml(modal.timezoneDraft)}" autocomplete="off" spellcheck="false" ${saving ? "disabled" : ""} />
@@ -1430,7 +1466,9 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
     const gModal = modal;
     const editing = Boolean(gModal.group);
     const saving = Boolean(gModal.saving);
-    const extAgents = state.externalAgents ?? [];
+    const extAgents = (state.externalAgents ?? []).filter(
+      (e) => allowCli || e.kind === "openai_api"
+    );
     const eligibleCount =
       state.accounts.filter((a) => isAccountGroupEligible(state, a)).length + extAgents.length;
     const ineligibleCount = state.accounts.length + extAgents.length - eligibleCount;
@@ -1484,10 +1522,13 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
       .filter(Boolean)
       .join("");
 
-    const extKindGroups: Array<{ kind: ExternalAgentKind; title: string; pid: "api" | "cli" }> = [
-      { kind: "openai_api", title: "OpenAI API", pid: "api" },
-      { kind: "local_cli", title: "本地 CLI", pid: "cli" },
-    ];
+    const extKindGroups: Array<{ kind: ExternalAgentKind; title: string; pid: "api" | "cli" }> =
+      allowCli
+        ? [
+            { kind: "openai_api", title: "OpenAI API", pid: "api" },
+            { kind: "local_cli", title: "本地 CLI", pid: "cli" },
+          ]
+        : [{ kind: "openai_api", title: "OpenAI API", pid: "api" }];
     const externalGroupHtml = extKindGroups
       .map(({ kind, title, pid }) => {
         const list = extAgents.filter((e) => e.kind === kind);
@@ -1536,8 +1577,10 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
       eligibleCount,
       ineligibleCount,
       gModal.selectedMembers.length,
-      Boolean(pickerContent)
+      Boolean(pickerContent),
+      allowCli
     );
+    const extShortLabel = allowCli ? "API / CLI" : "OpenAI API";
 
     return `
       <div class="${modalOverlayClass()}" role="dialog" aria-modal="true">
@@ -1545,11 +1588,11 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
           <div class="modal-title">${editing ? `编辑「${escapeHtml(gModal.group!.name)}」` : "创建群聊"}</div>
           <input id="modal-group-name-input" class="modal-input" maxlength="32" placeholder="群聊名称（如：产品头脑风暴）" aria-label="群聊名称" value="${escapeHtml(gModal.nameDraft)}" ${saving ? "disabled" : ""} />
           <div class="group-picker-head-row">
-            <div class="modal-desc">选择参与群聊的网页账号或 API / CLI 成员</div>
-            <button id="open-external-agents-from-group-btn" class="mini-btn primary-text" type="button" ${saving ? "disabled" : ""}>+ 管理 API/CLI</button>
+            <div class="modal-desc">选择参与群聊的网页账号或 ${extShortLabel} 成员</div>
+            <button id="open-external-agents-from-group-btn" class="mini-btn primary-text" type="button" ${saving ? "disabled" : ""}>+ 管理 ${allowCli ? "API/CLI" : "API"}</button>
           </div>
           <div class="group-member-picker">
-            ${pickerContent || `<div class="group-picker-empty">当前没有可用成员，可登录网页或点击右上角添加 API / CLI</div>`}
+            ${pickerContent || `<div class="group-picker-empty">当前没有可用成员，可登录网页或点击右上角添加 ${extShortLabel}</div>`}
           </div>
           <div id="modal-group-hint" class="modal-hint">${escapeHtml(hintText)}</div>
           ${gModal.error ? `<div id="modal-error-box" class="update-error-box" role="alert">${escapeHtml(gModal.error)}</div>` : ""}
@@ -1570,7 +1613,7 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
     let tabBody = "";
     if (kModal.tab === "context") {
       tabBody = `
-        <div class="modal-desc">所有被 @ 唤醒的成员在首次进入或配置变更后自动增量同步此上下文，API / CLI 成员每轮自动携带。</div>
+        <div class="modal-desc">所有被 @ 唤醒的成员在首次进入或配置变更后自动增量同步此上下文，${allowCli ? "API / CLI" : "API"} 成员每轮自动携带。</div>
         <textarea
           id="modal-group-context-input"
           class="modal-textarea"
@@ -1734,15 +1777,23 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
   }
   if (modal.kind === "external-agents") {
     const eModal = modal;
+    if (!allowCli && eModal.formKind === "local_cli") {
+      eModal.formKind = "openai_api";
+    }
     const saving = Boolean(eModal.saving);
-    const agents = state.externalAgents ?? [];
-    const presetsHtml = EXTERNAL_AGENT_PRESETS.map(
-      (p, idx) =>
-        `<button class="skill-preset-chip" data-ext-preset-idx="${idx}" type="button" ${saving ? "disabled" : ""}>+ ${escapeHtml(p.label)}</button>`
-    ).join("");
+    const agents = (state.externalAgents ?? []).filter(
+      (e) => allowCli || e.kind === "openai_api"
+    );
+    const presetsHtml = EXTERNAL_AGENT_PRESETS.map((p, idx) => ({ p, idx }))
+      .filter(({ p }) => allowCli || (p.kind === "openai_api" && !p.baseUrl.includes("127.0.0.1")))
+      .map(
+        ({ p, idx }) =>
+          `<button class="skill-preset-chip" data-ext-preset-idx="${idx}" type="button" ${saving ? "disabled" : ""}>+ ${escapeHtml(p.label)}</button>`
+      )
+      .join("");
     const listHtml =
       agents.length === 0
-        ? `<div class="group-picker-empty">暂未配置 API 或本地 CLI 成员，可点击下方预设或手动添加。</div>`
+        ? `<div class="group-picker-empty">暂未配置 ${allowCli ? "API 或本地 CLI" : "OpenAI 兼容 API"} 成员，可点击下方预设或手动添加。</div>`
         : agents
             .map((ext) => {
               const desc =
@@ -1770,9 +1821,9 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
     const fieldsHtml =
       eModal.formKind === "openai_api"
         ? `
-          <input id="ext-agent-url-input" class="modal-input" maxlength="260" placeholder="Base URL（例如 https://api.deepseek.com/v1 或 http://127.0.0.1:11434/v1）" value="${escapeHtml(eModal.baseUrlDraft)}" ${saving ? "disabled" : ""} />
-          <input id="ext-agent-key-input" class="modal-input" maxlength="512" type="password" placeholder="API Key（本机 Ollama 可留空）" value="${escapeHtml(eModal.apiKeyDraft)}" ${saving ? "disabled" : ""} />
-          <input id="ext-agent-model-input" class="modal-input" maxlength="120" placeholder="模型名称（例如 gpt-4o / deepseek-chat / qwen2.5:14b）" value="${escapeHtml(eModal.modelDraft)}" ${saving ? "disabled" : ""} />
+          <input id="ext-agent-url-input" class="modal-input" maxlength="260" placeholder="${allowCli ? "Base URL（例如 https://api.deepseek.com/v1 或 http://127.0.0.1:11434/v1）" : "Base URL（例如 https://api.deepseek.com/v1）"}" value="${escapeHtml(eModal.baseUrlDraft)}" ${saving ? "disabled" : ""} />
+          <input id="ext-agent-key-input" class="modal-input" maxlength="512" type="password" placeholder="${allowCli ? "API Key（本机 Ollama 可留空）" : "API Key"}" value="${escapeHtml(eModal.apiKeyDraft)}" ${saving ? "disabled" : ""} />
+          <input id="ext-agent-model-input" class="modal-input" maxlength="120" placeholder="${allowCli ? "模型名称（例如 gpt-4o / deepseek-chat / qwen2.5:14b）" : "模型名称（例如 gpt-4o / deepseek-chat）"}" value="${escapeHtml(eModal.modelDraft)}" ${saving ? "disabled" : ""} />
         `
         : `
           <input id="ext-agent-cmd-input" class="modal-input" maxlength="260" placeholder="CLI 命令（例如 claude / codex / gemini）" value="${escapeHtml(eModal.commandDraft)}" ${saving ? "disabled" : ""} />
@@ -1783,8 +1834,8 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
     return `
       <div class="${modalOverlayClass()}" role="dialog" aria-modal="true">
         <div class="modal-card group-knowledge-modal-card">
-          <div class="modal-title">API / 本地 CLI 混合成员</div>
-          <div class="modal-desc">配置直连 OpenAI 兼容接口或本地 CLI（如 Claude Code / Codex），与网页端账号混编入同一个群聊。</div>
+          <div class="modal-title">${allowCli ? "API / 本地 CLI 混合成员" : "直连 OpenAI 兼容 API 成员"}</div>
+          <div class="modal-desc">${allowCli ? "配置直连 OpenAI 兼容接口或本地 CLI（如 Claude Code / Codex），与网页端账号混编入同一个群聊。" : "配置直连 OpenAI 兼容接口（如 OpenAI / DeepSeek / 局域网模型），与网页端账号混编入同一个群聊。"}</div>
           <div class="ext-agent-list">${listHtml}</div>
           <div class="skill-presets-row">
             <span class="skill-presets-label">快速填充：</span>
@@ -1793,12 +1844,14 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
           <div class="skill-editor-box">
             <div class="ext-form-head">
               <span class="skill-editor-title">${eModal.editingId ? "编辑成员" : "新增直连成员"}</span>
-              <div class="ext-kind-switch">
-                <button class="mini-btn ${eModal.formKind === "openai_api" ? "primary-text" : ""}" data-ext-kind="openai_api" type="button" ${saving ? "disabled" : ""}>OpenAI API</button>
-                <button class="mini-btn ${eModal.formKind === "local_cli" ? "primary-text" : ""}" data-ext-kind="local_cli" type="button" ${saving ? "disabled" : ""}>本地 CLI</button>
-              </div>
+              ${allowCli ? `
+                <div class="ext-kind-switch">
+                  <button class="mini-btn ${eModal.formKind === "openai_api" ? "primary-text" : ""}" data-ext-kind="openai_api" type="button" ${saving ? "disabled" : ""}>OpenAI API</button>
+                  <button class="mini-btn ${eModal.formKind === "local_cli" ? "primary-text" : ""}" data-ext-kind="local_cli" type="button" ${saving ? "disabled" : ""}>本地 CLI</button>
+                </div>
+              ` : ""}
             </div>
-            <input id="ext-agent-name-input" class="modal-input" maxlength="40" placeholder="群聊显示名称（如：Claude-Code / DeepSeek）" value="${escapeHtml(eModal.nameDraft)}" ${saving ? "disabled" : ""} />
+            <input id="ext-agent-name-input" class="modal-input" maxlength="40" placeholder="${allowCli ? "群聊显示名称（如：Claude-Code / DeepSeek）" : "群聊显示名称（如：DeepSeek / GPT-4o）"}" value="${escapeHtml(eModal.nameDraft)}" ${saving ? "disabled" : ""} />
             ${fieldsHtml}
             <div class="skill-editor-actions">
               ${eModal.editingId ? `<button id="ext-agent-cancel-edit-btn" class="mini-btn" type="button" ${saving ? "disabled" : ""}>取消编辑</button>` : ""}
@@ -1841,6 +1894,20 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
   `;
 }
 
+function renderMobileUtilityButtons(state: ManagerSnapshot): string {
+  if (!isMobilePlatform(state.platform)) return "";
+  const hasUpdate = Boolean(updateState.result?.hasUpdate);
+  const settingsBtn =
+    state.platform === "ios"
+      ? `<button id="settings-btn" class="ghost-icon-btn" type="button" title="应用设置">${ICON_SETTINGS}</button>`
+      : "";
+  return `
+    ${settingsBtn}
+    <button id="theme-toggle-btn" class="ghost-icon-btn" type="button" title="主题：${themeLabel(themeMode)}（点击切换）">${themeIcon(themeMode)}</button>
+    <button id="check-update-btn" class="ghost-icon-btn update-trigger-btn ${hasUpdate ? "has-update" : ""}" type="button" title="${hasUpdate ? `发现新版本 v${escapeHtml(updateState.result!.latestVersion)}` : "检查更新"}">${ICON_UPDATE}${hasUpdate ? `<span class="update-dot"></span>` : ""}</button>
+  `;
+}
+
 function renderMiddleContent(state: ManagerSnapshot, provider: ProviderInfo): string {
   const providerAccounts = state.accounts.filter((a) => a.providerId === provider.id);
   const switchingKey = effectiveSwitchingKey(state);
@@ -1876,23 +1943,16 @@ function renderMiddleContent(state: ManagerSnapshot, provider: ProviderInfo): st
     )
     .join("");
 
-  const hasUpdate = Boolean(updateState.result?.hasUpdate);
-  const mobileThemeBtn = isMobile
-    ? `<button id="theme-toggle-btn" class="ghost-icon-btn" type="button" title="主题：${themeLabel(themeMode)}（点击切换）">${themeIcon(themeMode)}</button>`
-    : "";
-  const mobileUpdateBtn = isMobile
-    ? `<button id="check-update-btn" class="ghost-icon-btn update-trigger-btn ${hasUpdate ? "has-update" : ""}" type="button" title="${hasUpdate ? `发现新版本 v${escapeHtml(updateState.result!.latestVersion)}` : "检查更新"}">${ICON_UPDATE}${hasUpdate ? `<span class="update-dot"></span>` : ""}</button>`
-    : "";
+  const mobileUtilBtns = renderMobileUtilityButtons(state);
 
   const headerBtnHtml = provider.enabled
     ? `
-      ${mobileThemeBtn}
-      ${mobileUpdateBtn}
+      ${mobileUtilBtns}
       ${!isMobile ? `<button id="sync-all-btn" class="ghost-icon-btn" type="button" title="刷新已就绪账号额度">${ICON_REFRESH}</button>` : ""}
       <button id="open-site-btn" class="ghost-icon-btn" type="button" title="在浏览器中打开 ${escapeHtml(provider.shortName)} 官网">${ICON_EXTERNAL}</button>
       <button id="add-account-btn" class="icon-btn primary" type="button">+ 新增</button>
     `
-    : `${mobileThemeBtn}${mobileUpdateBtn}<button id="open-site-btn" class="icon-btn primary" type="button">打开官网 ${ICON_EXTERNAL}</button>`;
+    : `${mobileUtilBtns}<button id="open-site-btn" class="icon-btn primary" type="button">打开官网 ${ICON_EXTERNAL}</button>`;
 
   const listToolbarHtml =
     provider.enabled && providerAccounts.length >= 2 && state.conflicts.length === 0
@@ -2099,8 +2159,8 @@ function renderMiddleContent(state: ManagerSnapshot, provider: ProviderInfo): st
     ${noticeHtml}
     ${conflictsHtml}
     <div class="account-list">${listBody}</div>
-    ${renderDownloadToast()}
-    ${renderModal(state, provider)}
+    ${!isMobile ? renderDownloadToast() : ""}
+    ${!isMobile ? renderModal(state, provider) : ""}
   `;
 }
 
@@ -2408,10 +2468,14 @@ function formatComposerHintText(
   if (workflowMode === "a2a_relay") {
     return `A2A 接力模式：成员回复正文包含 @成员 将自动触发下一跳（上限 ${maxRelayHops} 跳）`;
   }
-  return "向全体成员发送（输入 @ 可点名，Enter 发送，Shift+Enter 换行）";
+  return isMobilePlatform(snapshot?.platform)
+    ? "向全体成员发送（输入 @ 可点名）"
+    : "向全体成员发送（输入 @ 可点名，Enter 发送，Shift+Enter 换行）";
 }
 
 function renderGroupMiddleContent(state: ManagerSnapshot, provider: ProviderInfo): string {
+  const isMobile = isMobilePlatform(state.platform);
+  const allowCli = supportsLocalCliAgents(state.platform);
   const noticeHtml = state.notice
     ? `
       <div class="notice-bar">
@@ -2421,7 +2485,10 @@ function renderGroupMiddleContent(state: ManagerSnapshot, provider: ProviderInfo
     `
     : "";
 
-  const extCount = (state.externalAgents ?? []).length;
+  const extCount = (state.externalAgents ?? []).filter(
+    (e) => allowCli || e.kind === "openai_api"
+  ).length;
+  const extShortLabel = allowCli ? "API/CLI" : "API";
 
   const listBody =
     state.groupChats.length === 0
@@ -2429,7 +2496,7 @@ function renderGroupMiddleContent(state: ManagerSnapshot, provider: ProviderInfo
         <div class="empty-list">
           <div class="empty-icon-circle">${ICON_GROUP}</div>
           <div>暂无群聊</div>
-          <div>点击右上角「+ 创建群聊」，可混编网页账号与 API / CLI 成员协同对话</div>
+          <div>点击右上角「+ ${isMobile ? "新建" : "创建群聊"}」，可混编网页账号与 ${allowCli ? "API / CLI" : "OpenAI 兼容 API"} 成员协同对话</div>
         </div>
       `
       : state.groupChats
@@ -2498,14 +2565,15 @@ function renderGroupMiddleContent(state: ManagerSnapshot, provider: ProviderInfo
         ${state.groupChats.length > 0 ? `<span class="count-badge">${state.groupChats.length}</span>` : ""}
       </div>
       <div class="header-actions">
-        <button id="manage-external-agents-btn" class="icon-btn ext-header-btn" type="button" title="管理直连 OpenAI API 与本地 CLI 成员">API/CLI${extCount > 0 ? ` (${extCount})` : ""}</button>
-        <button id="create-group-btn" class="icon-btn primary" type="button">+ 创建群聊</button>
+        ${renderMobileUtilityButtons(state)}
+        <button id="manage-external-agents-btn" class="icon-btn ext-header-btn" type="button" title="${allowCli ? "管理直连 OpenAI API 与本地 CLI 成员" : "管理直连 OpenAI 兼容 API 成员"}">${extShortLabel}${extCount > 0 ? ` (${extCount})` : ""}</button>
+        <button id="create-group-btn" class="icon-btn primary" type="button">+ ${isMobile ? "新建" : "创建群聊"}</button>
       </div>
     </div>
     ${noticeHtml}
     <div class="account-list">${listBody}</div>
-    ${renderDownloadToast()}
-    ${renderModal(state, provider)}
+    ${!isMobile ? renderDownloadToast() : ""}
+    ${!isMobile ? renderModal(state, provider) : ""}
   `;
 }
 
@@ -2533,6 +2601,8 @@ function getLatestRoundCompletedReplies(
 }
 
 function renderGroupRightStage(state: ManagerSnapshot): string {
+  const isMobile = isMobilePlatform(state.platform);
+  const allowCli = supportsLocalCliAgents(state.platform);
   const activeGroup = state.activeGroupId
     ? state.groupChats.find((g) => g.id === state.activeGroupId)
     : undefined;
@@ -2543,7 +2613,7 @@ function renderGroupRightStage(state: ManagerSnapshot): string {
         <div class="stage-card">
           <div class="stage-logo-tile group-stage-icon">${ICON_GROUP}</div>
           <div class="placeholder-title">创建你的跨服务 AI 群聊</div>
-          <div class="placeholder-desc">支持 Muse / Hark 网页账号与 OpenAI API / 本地 CLI 混编入群，内置并行、评审流、A2A 接力与独立会话绑定。</div>
+          <div class="placeholder-desc">支持 Muse / Hark 网页账号与 ${allowCli ? "OpenAI API / 本地 CLI" : "OpenAI 兼容 API"} 混编入群，内置并行、评审流、A2A 接力与独立会话绑定。</div>
           <div class="stage-card-actions">
             <button id="stage-create-group-btn" class="btn primary" type="button">+ 创建群聊</button>
           </div>
@@ -2770,6 +2840,7 @@ function renderGroupRightStage(state: ManagerSnapshot): string {
       <div class="group-chat-header">
         <div class="group-header-main">
           <div class="group-header-title-row">
+            ${isMobile ? `<button id="mobile-group-back-btn" class="ghost-icon-btn mobile-group-back-btn" type="button" title="返回群聊列表" aria-label="返回群聊列表">←</button>` : ""}
             <h2 class="group-chat-title">${escapeHtml(activeGroup.name)}</h2>
             <span class="count-badge">${activeGroup.members.length} 位成员</span>
           </div>
@@ -2909,7 +2980,7 @@ function renderGroupRightStage(state: ManagerSnapshot): string {
               class="group-chat-input"
               rows="2"
               maxlength="4000"
-              placeholder="输入消息，输入 @ 可唤起成员点名（Enter 发送，Shift+Enter 换行）"
+              placeholder="${isMobile ? "输入消息，输入 @ 可唤起成员点名" : "输入消息，输入 @ 可唤起成员点名（Enter 发送，Shift+Enter 换行）"}"
             >${escapeHtml(draftVal)}</textarea>
             <button id="group-send-btn" class="btn primary group-send-btn" type="button" ${groupSending ? "disabled" : ""}>${groupSending ? "发送中…" : "发送"}</button>
           </div>
@@ -2957,17 +3028,29 @@ function render(): void {
 
   const provider = currentProvider(snapshot);
   const isMobile = isMobilePlatform(snapshot.platform);
-  const isGroupsView = !isMobile && viewMode === "groups";
+  const canGroupChat = supportsGroupChat(snapshot.platform);
+  const isGroupsView = canGroupChat && viewMode === "groups";
   const anyGroupNeedsAuth = snapshot.groupChats.some(groupHasNeedsAuth);
 
   if (isMobile) {
+    const hasActiveGroup = Boolean(
+      snapshot.activeGroupId &&
+        snapshot.groupChats.some((g) => g.id === snapshot!.activeGroupId)
+    );
+    const effectiveSubView = hasActiveGroup ? mobileGroupSubView : "list";
     root.innerHTML = `
       <div class="mobile-shell">
         <div class="mobile-tabs">
+          ${canGroupChat ? `
+            <button id="mobile-group-tab-btn" class="mobile-tab ${isGroupsView ? "active" : ""}" type="button">
+              <span class="mobile-tab-group-icon">${ICON_GROUP}${anyGroupNeedsAuth ? `<span class="warn-dot" aria-hidden="true"></span>` : ""}</span>
+              <span>群聊${snapshot.groupChats.length > 0 ? ` (${snapshot.groupChats.length})` : ""}</span>
+            </button>
+          ` : ""}
           ${snapshot.providers
             .map(
               (p) => `
-              <button class="mobile-tab ${p.id === provider.id ? "active" : ""}" data-provider="${escapeHtml(p.id)}" type="button">
+              <button class="mobile-tab ${!isGroupsView && p.id === provider.id ? "active" : ""}" data-provider="${escapeHtml(p.id)}" type="button">
                 ${renderProviderLogo(p, "mobile-tab-logo")}
                 <span>${escapeHtml(p.shortName)}</span>
               </button>
@@ -2975,9 +3058,22 @@ function render(): void {
             )
             .join("")}
         </div>
-        <div class="middle-column" style="width:100%;min-width:0;flex:1;border-right:none;">
-          ${renderMiddleContent(snapshot, provider)}
-        </div>
+        ${isGroupsView ? `
+          <div class="mobile-group-split" data-subview="${effectiveSubView}">
+            <section class="middle-column mobile-group-list-pane">
+              ${renderGroupMiddleContent(snapshot, provider)}
+            </section>
+            <div class="mobile-group-chat-pane">
+              ${renderGroupRightStage(snapshot)}
+            </div>
+          </div>
+        ` : `
+          <div class="middle-column mobile-provider-pane" style="width:100%;min-width:0;flex:1;border-right:none;">
+            ${renderMiddleContent(snapshot, provider)}
+          </div>
+        `}
+        ${renderDownloadToast()}
+        ${renderModal(snapshot, provider)}
       </div>
     `;
   } else {
@@ -3072,6 +3168,28 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
     await callCommand("select_group_chat", { groupId: targetId });
   });
 
+  document.querySelector("#mobile-group-tab-btn")?.addEventListener("click", async () => {
+    if (modal.kind !== "none") {
+      await setModal({ kind: "none" });
+    }
+    if (viewMode === "groups") {
+      if (mobileGroupSubView === "chat") {
+        mobileGroupSubView = "list";
+        rerenderPreservingScroll();
+      }
+      return;
+    }
+    viewMode = "groups";
+    mobileGroupSubView = "list";
+    const targetId = state.activeGroupId ?? state.groupChats[0]?.id ?? null;
+    await callCommand("select_group_chat", { groupId: targetId });
+  });
+
+  document.querySelector("#mobile-group-back-btn")?.addEventListener("click", () => {
+    mobileGroupSubView = "list";
+    rerenderPreservingScroll();
+  });
+
   document.querySelectorAll<HTMLElement>("[data-provider]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const nextId = btn.dataset.provider as ProviderId;
@@ -3137,7 +3255,13 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
     row.addEventListener("click", async () => {
       if (modal.kind !== "none") return;
       const gid = row.dataset.selectGroupId;
-      if (!gid || gid === state.activeGroupId) return;
+      if (!gid) return;
+      mobileGroupSubView = "chat";
+      if (gid === state.activeGroupId) {
+        forceGroupScrollBottom = true;
+        rerenderPreservingScroll();
+        return;
+      }
       forceGroupScrollBottom = true;
       await callCommand("select_group_chat", { groupId: gid });
     });
@@ -3299,7 +3423,9 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
       const pid = btn.dataset.jumpProvider;
       const uuid = btn.dataset.jumpUuid;
       if (!pid || !uuid) return;
-      viewMode = "provider";
+      if (state.platform !== "ios") {
+        viewMode = "provider";
+      }
       const alreadyWarm = state.warmAccounts.some(
         (k) => k.providerId === pid && k.uuid === uuid
       );
@@ -3645,11 +3771,13 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
         .join("");
       mentionMenuEl.hidden = false;
       mentionMenuEl.querySelectorAll<HTMLButtonElement>("[data-mention-idx]").forEach((btn) => {
-        btn.addEventListener("mousedown", (ev) => {
+        const handlePick = (ev: Event) => {
           ev.preventDefault();
           const idx = Number(btn.dataset.mentionIdx ?? "-1");
           if (idx >= 0) applyMentionCandidate(idx);
-        });
+        };
+        btn.addEventListener("mousedown", handlePick);
+        btn.addEventListener("click", handlePick);
       });
       mentionMenuEl
         .querySelector<HTMLElement>(".group-mention-item.active")
@@ -4270,7 +4398,10 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
       }
       const hintEl = document.querySelector<HTMLElement>("#modal-group-hint");
       if (hintEl) {
-        const extCount = (state.externalAgents ?? []).length;
+        const allowCli = supportsLocalCliAgents(state.platform);
+        const extCount = (state.externalAgents ?? []).filter(
+          (e) => allowCli || e.kind === "openai_api"
+        ).length;
         const eligibleCount =
           state.accounts.filter((a) => isAccountGroupEligible(state, a)).length + extCount;
         const ineligibleCount = state.accounts.length + extCount - eligibleCount;
@@ -4278,7 +4409,8 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
           eligibleCount,
           ineligibleCount,
           modal.selectedMembers.length,
-          true
+          true,
+          allowCli
         );
       }
       const confirmBtn = document.querySelector<HTMLButtonElement>("#modal-confirm-btn");
@@ -4848,6 +4980,8 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
           });
         } else {
           viewMode = "groups";
+          mobileGroupSubView = "chat";
+          forceGroupScrollBottom = true;
           saved = await callCommand("create_group_chat", {
             name: currentModal.nameDraft.trim(),
             members: currentModal.selectedMembers,

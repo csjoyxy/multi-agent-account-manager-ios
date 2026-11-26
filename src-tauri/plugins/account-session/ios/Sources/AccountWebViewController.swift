@@ -71,10 +71,27 @@ final class AccountSessionCoordinator {
       && cur.viewInstanceId == viewInstanceId
   }
 
+  private static let embeddedWidgetHosts: [String] = [
+    "challenges.cloudflare.com",
+    "turnstile.cloudflare.com",
+    "hcaptcha.com",
+    "recaptcha.net",
+    "gstatic.com",
+    "arkoselabs.com",
+    "funcaptcha.com",
+    "friendlycaptcha.com",
+    "geetest.com",
+    "captcha-delivery.com",
+    "firebaseapp.com",
+    "stripe.com",
+    "stripecdn.com",
+  ]
+
   func isUuidActive(_ uuid: String) -> Bool {
     lock.lock()
-    defer { lock.unlock() }
-    return activeSpec?.uuid.lowercased() == uuid.lowercased()
+    let fgActive = activeSpec?.uuid.lowercased() == uuid.lowercased()
+    lock.unlock()
+    return fgActive || IosGroupWebViewPool.shared.hasActiveWebView(forUuid: uuid)
   }
 
   func markCommittedAndReveal(_ switchSeq: UInt64, title: String) {
@@ -109,10 +126,21 @@ final class AccountSessionCoordinator {
     if allowedHosts.contains("*") {
       return true
     }
-    return allowedHosts.contains { allowed in
+    if allowedHosts.contains(where: { allowed in
       let clean = allowed.lowercased()
       return host == clean || host.hasSuffix(".\(clean)")
+    }) {
+      return true
     }
+    if Self.embeddedWidgetHosts.contains(where: { widget in
+      host == widget || host.hasSuffix(".\(widget)")
+    }) {
+      return true
+    }
+    if (host == "www.google.com" || host == "google.com") && url.path.hasPrefix("/recaptcha") {
+      return true
+    }
+    return false
   }
 
   func isGoogleOAuthHost(_ url: URL?) -> Bool {
@@ -231,10 +259,11 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
   private let popupCloseButton = UIButton(type: .system)
   private let popupWebSlot = UIView()
 
+  private var borrowedEntry: PooledAccountWebView?
   private var mainWebView: WKWebView?
   private var popupWebView: WKWebView?
 
-  private static let safariUserAgent =
+  static let safariUserAgent =
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
 
   init(initialSpec: MobileAccountSessionSpec) {
@@ -255,6 +284,10 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
 
   deinit {
     probeTimer?.invalidate()
+    if let entry = borrowedEntry {
+      borrowedEntry = nil
+      IosGroupWebViewPool.shared.returnFromForeground(entry, owner: self)
+    }
     AccountSessionCoordinator.shared.detachController(self)
   }
 
@@ -374,6 +407,17 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
     ])
   }
 
+  private func releaseBorrowedWebView() {
+    if let entry = borrowedEntry {
+      borrowedEntry = nil
+      mainWebView = nil
+      IosGroupWebViewPool.shared.returnFromForeground(entry, owner: self)
+    } else {
+      mainWebView?.removeFromSuperview()
+      mainWebView = nil
+    }
+  }
+
   func bindSessionSpec(_ spec: MobileAccountSessionSpec) {
     currentSpec = spec
     committedSent = false
@@ -384,60 +428,60 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
 
     closePopupWebView()
     probeTimer?.invalidate()
-    mainWebView?.removeFromSuperview()
-    mainWebView = nil
+    probeTimer = nil
+    releaseBorrowedWebView()
 
-    guard #available(iOS 17.0, *), let uuid = UUID(uuidString: spec.uuid) else {
-      AccountSessionCoordinator.shared.emitSessionFailed(spec: spec, reason: "iOS 多资料隔离初始化失败")
+    guard UUID(uuidString: spec.uuid) != nil else {
+      AccountSessionCoordinator.shared.emitSessionFailed(spec: spec, reason: "账号资料 UUID 无效")
       dismiss(animated: true)
       return
     }
 
-    let dataStore = WKWebsiteDataStore(forIdentifier: uuid)
-    if let proxyRaw = spec.proxyUrl, !proxyRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      if let proxyCfg = Self.buildHttpConnectProxyConfig(raw: proxyRaw) {
-        dataStore.proxyConfigurations = [proxyCfg]
+    spinner.startAnimating()
+    IosGroupWebViewPool.shared.borrowOrCreateForForeground(spec: spec, owner: self) { [weak self] result in
+      guard let self = self else { return }
+      guard AccountSessionCoordinator.shared.isCurrent(spec.switchSeq, spec.viewInstanceId) else {
+        if case .success(let (entry, _)) = result {
+          IosGroupWebViewPool.shared.returnFromForeground(entry, owner: self)
+        }
+        return
       }
-    } else {
-      dataStore.proxyConfigurations = []
-    }
 
-    let config = WKWebViewConfiguration()
-    config.websiteDataStore = dataStore
-    config.allowsInlineMediaPlayback = true
-    config.preferences.javaScriptCanOpenWindowsAutomatically = true
-    config.defaultWebpagePreferences.allowsContentJavaScript = true
-    config.userContentController.addUserScript(
-      WKUserScript(source: Self.hookInitScript, injectionTime: .atDocumentStart, forMainFrameOnly: true)
-    )
-    if let tzScript = spec.timezoneInitScript, !tzScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      config.userContentController.addUserScript(
-        WKUserScript(source: tzScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-      )
-    }
+      switch result {
+      case .failure(let err):
+        self.spinner.stopAnimating()
+        AccountSessionCoordinator.shared.emitSessionFailed(spec: spec, reason: err.message)
+        self.dismiss(animated: true)
+      case .success(let (entry, hasLiveAllowedPage)):
+        self.borrowedEntry = entry
+        let wv = entry.webView
+        wv.removeFromSuperview()
+        wv.translatesAutoresizingMaskIntoConstraints = false
+        self.contentContainer.addSubview(wv)
+        NSLayoutConstraint.activate([
+          wv.topAnchor.constraint(equalTo: self.contentContainer.topAnchor),
+          wv.leadingAnchor.constraint(equalTo: self.contentContainer.leadingAnchor),
+          wv.trailingAnchor.constraint(equalTo: self.contentContainer.trailingAnchor),
+          wv.bottomAnchor.constraint(equalTo: self.contentContainer.bottomAnchor),
+        ])
+        self.mainWebView = wv
 
-    let wv = WKWebView(frame: .zero, configuration: config)
-    wv.navigationDelegate = self
-    wv.uiDelegate = self
-    wv.allowsBackForwardNavigationGestures = true
-    wv.customUserAgent = Self.safariUserAgent
-    wv.translatesAutoresizingMaskIntoConstraints = false
-    contentContainer.addSubview(wv)
-    NSLayoutConstraint.activate([
-      wv.topAnchor.constraint(equalTo: contentContainer.topAnchor),
-      wv.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
-      wv.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
-      wv.bottomAnchor.constraint(equalTo: contentContainer.bottomAnchor),
-    ])
-    mainWebView = wv
+        if hasLiveAllowedPage, let curUrl = wv.url {
+          self.spinner.stopAnimating()
+          self.committedSent = true
+          AccountSessionCoordinator.shared.emitPageCommitVisible(spec: spec, url: curUrl.absoluteString)
+          self.runProbeTick()
+        } else if let entryUrl = URL(string: spec.entryUrl) {
+          self.spinner.startAnimating()
+          wv.load(URLRequest(url: entryUrl))
+        } else {
+          self.spinner.stopAnimating()
+        }
 
-    if let entryUrl = URL(string: spec.entryUrl) {
-      spinner.startAnimating()
-      wv.load(URLRequest(url: entryUrl))
-    }
-
-    probeTimer = Timer.scheduledTimer(withTimeInterval: 1.1, repeats: true) { [weak self] _ in
-      self?.runProbeTick()
+        self.probeTimer = Timer.scheduledTimer(withTimeInterval: 1.1, repeats: true) { [weak self] _ in
+          self?.runProbeTick()
+        }
+      }
     }
   }
 
@@ -452,7 +496,7 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
     probeTimer?.invalidate()
     probeTimer = nil
     closePopupWebView()
-    mainWebView?.stopLoading()
+    releaseBorrowedWebView()
     if presentingViewController != nil {
       dismiss(animated: true)
     }
@@ -466,6 +510,7 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
     probeTimer?.invalidate()
     probeTimer = nil
     let spec = currentSpec
+    releaseBorrowedWebView()
     AccountSessionCoordinator.shared.emitActivityClosed(spec: spec)
     dismiss(animated: true)
   }
@@ -484,14 +529,17 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
 
   private func closePopupWebView() {
     popupWebView?.stopLoading()
+    popupWebView?.configuration.userContentController.removeScriptMessageHandler(
+      forName: LocalStorageSyncScriptHandler.handlerName
+    )
     popupWebView?.removeFromSuperview()
     popupWebView = nil
     popupContainer.isHidden = true
   }
 
-  func webView(
+  func handleDecidePolicy(
     _ webView: WKWebView,
-    decidePolicyFor navigationAction: WKNavigationAction,
+    navigationAction: WKNavigationAction,
     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
   ) {
     guard let url = navigationAction.request.url else {
@@ -532,7 +580,7 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
     decisionHandler(.cancel)
   }
 
-  func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+  func handleDidCommit(_ webView: WKWebView) {
     guard webView === mainWebView else { return }
     guard let url = webView.url, url.absoluteString != "about:blank" else { return }
     if !committedSent && AccountSessionCoordinator.shared.hostMatchesAllowed(url, allowedHosts: currentSpec.allowedHosts) {
@@ -541,19 +589,111 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
     }
   }
 
-  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+  func handleDidFinish(_ webView: WKWebView) {
     if webView === mainWebView {
       spinner.stopAnimating()
       runProbeTick()
+    } else if webView === popupWebView {
+      IosProfileStoreManager.shared.flushCookiesForUuid(currentSpec.uuid)
     }
   }
 
-  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+  func handleDidFail(_ webView: WKWebView, error: Error) {
     handleLoadError(webView, error: error)
   }
 
+  func handleProcessDidTerminate(_ webView: WKWebView) {
+    if webView === mainWebView {
+      webView.reload()
+    } else if webView === popupWebView {
+      closePopupWebView()
+    }
+  }
+
+  func handleCreatePopupWebView(
+    _ webView: WKWebView,
+    configuration: WKWebViewConfiguration,
+    navigationAction: WKNavigationAction
+  ) -> WKWebView? {
+    if let target = navigationAction.request.url,
+       AccountSessionCoordinator.shared.isGoogleOAuthHost(target) {
+      AccountSessionCoordinator.shared.emitExternalAuthUnavailable(
+        spec: currentSpec,
+        reason: "iOS 内置窗口暂不支持 Google OAuth，请使用 Chrome 登录后导入 Cookie"
+      )
+      return nil
+    }
+    closePopupWebView()
+    let ucc = WKUserContentController()
+    configuration.userContentController = ucc
+    if let lsScript = IosProfileStoreManager.shared.localStorageInitScript(for: currentSpec.uuid) {
+      ucc.add(LocalStorageSyncScriptHandler(), name: LocalStorageSyncScriptHandler.handlerName)
+      ucc.addUserScript(
+        WKUserScript(source: lsScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+      )
+    }
+    let autoFlag = IosGroupWebViewPool.shared.currentAutoApprove() ? "true" : "false"
+    ucc.addUserScript(
+      WKUserScript(source: "window.__maamAutoApprove = \(autoFlag);", injectionTime: .atDocumentStart, forMainFrameOnly: true)
+    )
+    ucc.addUserScript(
+      WKUserScript(source: Self.hookInitScript, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+    )
+    if let tzScript = currentSpec.timezoneInitScript, !tzScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      ucc.addUserScript(
+        WKUserScript(source: tzScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+      )
+    }
+    let popup = WKWebView(frame: .zero, configuration: configuration)
+    popup.navigationDelegate = self
+    popup.uiDelegate = self
+    popup.customUserAgent = Self.safariUserAgent
+    popup.translatesAutoresizingMaskIntoConstraints = false
+    popupWebSlot.addSubview(popup)
+    NSLayoutConstraint.activate([
+      popup.topAnchor.constraint(equalTo: popupWebSlot.topAnchor),
+      popup.leadingAnchor.constraint(equalTo: popupWebSlot.leadingAnchor),
+      popup.trailingAnchor.constraint(equalTo: popupWebSlot.trailingAnchor),
+      popup.bottomAnchor.constraint(equalTo: popupWebSlot.bottomAnchor),
+    ])
+    popupWebView = popup
+    popupDomainLabel.text = navigationAction.request.url?.host.map { "🔒 \($0)" } ?? "登录窗口"
+    popupContainer.isHidden = false
+    return popup
+  }
+
+  func handleDidClose(_ webView: WKWebView) {
+    if webView === popupWebView {
+      closePopupWebView()
+    }
+  }
+
+  func webView(
+    _ webView: WKWebView,
+    decidePolicyFor navigationAction: WKNavigationAction,
+    decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+  ) {
+    handleDecidePolicy(webView, navigationAction: navigationAction, decisionHandler: decisionHandler)
+  }
+
+  func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+    handleDidCommit(webView)
+  }
+
+  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+    handleDidFinish(webView)
+  }
+
+  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+    handleDidFail(webView, error: error)
+  }
+
   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-    handleLoadError(webView, error: error)
+    handleDidFail(webView, error: error)
+  }
+
+  func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+    handleProcessDidTerminate(webView)
   }
 
   private func handleLoadError(_ webView: WKWebView, error: Error) {
@@ -580,45 +720,11 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
     for navigationAction: WKNavigationAction,
     windowFeatures: WKWindowFeatures
   ) -> WKWebView? {
-    if let target = navigationAction.request.url,
-       AccountSessionCoordinator.shared.isGoogleOAuthHost(target) {
-      AccountSessionCoordinator.shared.emitExternalAuthUnavailable(
-        spec: currentSpec,
-        reason: "iOS 内置窗口暂不支持 Google OAuth，请使用 Chrome 登录后导入 Cookie"
-      )
-      return nil
-    }
-    closePopupWebView()
-    configuration.userContentController.addUserScript(
-      WKUserScript(source: Self.hookInitScript, injectionTime: .atDocumentStart, forMainFrameOnly: true)
-    )
-    if let tzScript = currentSpec.timezoneInitScript, !tzScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      configuration.userContentController.addUserScript(
-        WKUserScript(source: tzScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-      )
-    }
-    let popup = WKWebView(frame: .zero, configuration: configuration)
-    popup.navigationDelegate = self
-    popup.uiDelegate = self
-    popup.customUserAgent = Self.safariUserAgent
-    popup.translatesAutoresizingMaskIntoConstraints = false
-    popupWebSlot.addSubview(popup)
-    NSLayoutConstraint.activate([
-      popup.topAnchor.constraint(equalTo: popupWebSlot.topAnchor),
-      popup.leadingAnchor.constraint(equalTo: popupWebSlot.leadingAnchor),
-      popup.trailingAnchor.constraint(equalTo: popupWebSlot.trailingAnchor),
-      popup.bottomAnchor.constraint(equalTo: popupWebSlot.bottomAnchor),
-    ])
-    popupWebView = popup
-    popupDomainLabel.text = navigationAction.request.url?.host.map { "🔒 \($0)" } ?? "登录窗口"
-    popupContainer.isHidden = false
-    return popup
+    handleCreatePopupWebView(webView, configuration: configuration, navigationAction: navigationAction)
   }
 
   func webViewDidClose(_ webView: WKWebView) {
-    if webView === popupWebView {
-      closePopupWebView()
-    }
+    handleDidClose(webView)
   }
 
   private func runProbeTick() {
@@ -699,24 +805,7 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
     }
   }
 
-  @available(iOS 17.0, *)
-  private static func buildHttpConnectProxyConfig(raw: String) -> ProxyConfiguration? {
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let url = URL(string: trimmed),
-          url.scheme?.lowercased() == "http",
-          let host = url.host,
-          !host.isEmpty else {
-      return nil
-    }
-    let portVal = UInt16(url.port ?? 80)
-    guard let nwPort = NWEndpoint.Port(rawValue: portVal) else {
-      return nil
-    }
-    let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: nwPort)
-    return ProxyConfiguration(httpCONNECTProxy: endpoint)
-  }
-
-  private static let hookInitScript = #"""
+  static let hookInitScript = #"""
 (() => {
   try {
     if (location.protocol !== 'https:') return;
@@ -926,6 +1015,116 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
         authCheck.checkedAt = Date.now();
       } catch (_) { authCheck.checkedAt = Date.now(); } finally { authCheck.inflight = false; }
     };
+    if (isPrimaryHost && !window.__maamAutoApproveWatcher) {
+      window.__maamAutoApproveWatcher = true;
+      const DANGER_RE = /删除|移除|注销|清空|退出登录|退出账户|确认退出|支付|付款|购买|订阅|充值|转账|密码|更改邮箱|停用|封禁|delete|remove|logout|log out|sign out|payment|purchase|billing|checkout|subscribe|charge|transfer|password|deactivate|reset account/i;
+      const PROMPT_RE = /授权|审批|权限|批准|请求允许|请求执行|需要你的允许|需要您的允许|需要确认|是否(?:允许|批准|授权|同意)|要允许|你的助手想要|助手想要|想(?:要|使用|访问|运行|执行|打开|上传|下载|读取|写入|查看|获取|调用|连接|发送)|允许.{0,24}(?:此操作|此次|使用|运行|执行|访问|操作|工具|命令|浏览|上传|下载|读取|写入|修改|打开|连接|发送|调用|查看|获取)|approve|approval|authorize|permission|wants to|would like to|asks? to|needs approval|allow\s+.{0,32}\bto\b|allow\s+.{0,24}(?:this|use|run|execute|access|tool|command|browser|upload|download|read|write|open|connect|send)/i;
+      const SINGLE_APPROVE_BTN_RE = /^(?:允许(?!.*(?:始终|总是))[^，。！？]{0,10}|本次允许|仅允许一次|批准(?!.*(?:始终|总是))[^，。！？]{0,10}|同意(?:并继续)?|确认授权|确认允许|继续执行|allow(?!\s+always)(?:\s+(?:once|this\s+time|this\s+\w+|access|upload|download|run|execute|use))?|approve(?:\s+(?:once|this\s+\w+))?|authorize|grant)$/i;
+      const APPROVE_BTN_RE = /^(?:(?:允许|本次允许|仅允许一次|始终允许|总是允许|批准|始终批准)[^，。！？]{0,18}|同意(?:并继续)?|确认授权|确认允许|继续执行|(?:allow|always\s+allow|approve|always\s+approve|authorize|grant)(?:\s+[\w\s'-]{1,28})?)$/i;
+      const REJECT_BTN_RE = /^(?:(?:拒绝|不允许|不批准)[^，。！？]{0,12}|取消|暂不|以后再说|(?:deny|decline|reject|don't allow|do not allow)(?:\s+[\w\s'-]{1,20})?|cancel|block|never|not now)$/i;
+      const MODAL_BOX_SEL = '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog, [class*="permission" i], [class*="approval" i], [class*="approve" i], [class*="authorize" i], [class*="consent" i], [data-testid*="approv" i], [data-testid*="permiss" i]';
+      const clickedAt = new WeakMap();
+      const getBtnLabel = (b) => ((b.innerText || b.textContent || b.getAttribute('aria-label') || '') + '').replace(/\s+/g, ' ').trim();
+      const isElVisible = (el) => {
+        if (!el || !el.isConnected) return false;
+        const r = el.getBoundingClientRect();
+        if (r.width < 16 || r.height < 14) return false;
+        let cur = el;
+        for (let d = 0; cur && cur.nodeType === 1 && d < 8; d++) {
+          try {
+            const st = getComputedStyle(cur);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const op = parseFloat(st.opacity);
+            if (!Number.isNaN(op) && op < 0.05) return false;
+          } catch (_) {}
+          cur = cur.parentElement;
+        }
+        return true;
+      };
+      const isActionableBtn = (b) => {
+        if (!isElVisible(b) || b.disabled || b.getAttribute('aria-disabled') === 'true') return false;
+        if (b.closest && b.closest('nav, aside')) return false;
+        return true;
+      };
+      const findApprovalTarget = () => {
+        try {
+          const allBtns = document.querySelectorAll('button, [role="button"]');
+          for (const b of allBtns) {
+            if (!isActionableBtn(b)) continue;
+            const lbl = getBtnLabel(b);
+            if (!APPROVE_BTN_RE.test(lbl) || REJECT_BTN_RE.test(lbl) || DANGER_RE.test(lbl)) continue;
+            let cur = b.parentElement;
+            for (let step = 0; step < 7 && cur && cur !== document.body && cur !== document.documentElement; step++) {
+              if (cur.tagName === 'NAV' || cur.tagName === 'ASIDE') break;
+              let isModal = false;
+              try { isModal = typeof cur.matches === 'function' && cur.matches(MODAL_BOX_SEL); } catch (_) {}
+              if (!isModal && cur.querySelector && cur.querySelector('textarea, [contenteditable="true"]')) break;
+              const txt = (cur.innerText || cur.textContent || '').trim();
+              if (txt.length > 2200) break;
+              if (txt.length >= 6) {
+                if (DANGER_RE.test(txt)) break;
+                if (PROMPT_RE.test(txt)) {
+                  const boxBtns = Array.from(cur.querySelectorAll('button, [role="button"]')).filter(isActionableBtn);
+                  const hasReject = boxBtns.some((x) => REJECT_BTN_RE.test(getBtnLabel(x)));
+                  if (hasReject || isModal) {
+                    const approveBtns = boxBtns.filter((x) => {
+                      const xLbl = getBtnLabel(x);
+                      return APPROVE_BTN_RE.test(xLbl) && !REJECT_BTN_RE.test(xLbl) && !DANGER_RE.test(xLbl);
+                    });
+                    if (approveBtns.length > 0) {
+                      const picked = approveBtns.find((x) => SINGLE_APPROVE_BTN_RE.test(getBtnLabel(x))) || approveBtns[0];
+                      return { box: cur, button: picked, text: txt };
+                    }
+                  }
+                }
+              }
+              cur = cur.parentElement;
+            }
+          }
+        } catch (_) {}
+        return null;
+      };
+      window.__maamFindAuthPrompt = () => {
+        const target = findApprovalTarget();
+        return target ? target.text.slice(0, 140) : '';
+      };
+      window.__maamScanAutoApprove = () => {
+        if (window.__maamAutoApprove !== true) return false;
+        const target = findApprovalTarget();
+        if (!target) return false;
+        const now = Date.now();
+        const last = clickedAt.get(target.button) || 0;
+        if (now - last < 4000) return false;
+        clickedAt.set(target.button, now);
+        target.button.click();
+        return true;
+      };
+      let approveTimer = null;
+      const scheduleAutoApproveScan = () => {
+        if (window.__maamAutoApprove !== true || approveTimer) return;
+        approveTimer = setTimeout(() => {
+          approveTimer = null;
+          window.__maamScanAutoApprove();
+        }, 250);
+      };
+      const startObserver = () => {
+        try {
+          if (!document.documentElement) return;
+          const obs = new MutationObserver(() => scheduleAutoApproveScan());
+          obs.observe(document.documentElement, { childList: true, subtree: true });
+        } catch (_) {}
+      };
+      if (document.documentElement) {
+        startObserver();
+      } else {
+        document.addEventListener('DOMContentLoaded', startObserver, { once: true });
+      }
+      setInterval(() => {
+        if (window.__maamAutoApprove === true) {
+          window.__maamScanAutoApprove();
+        }
+      }, 1200);
+    }
     const capture = (el) => {
       if (!el || typeof el.value !== 'string') return;
       const v = el.value.trim();

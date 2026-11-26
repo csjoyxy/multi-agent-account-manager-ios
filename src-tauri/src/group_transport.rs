@@ -2,13 +2,13 @@ use crate::storage::{now_ms, normalize_uuid, AccountKey, ExternalAgentKind, Exte
 use url::Url;
 use uuid::Uuid;
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 use serde_json::Value;
 #[cfg(desktop)]
 use std::io::{Read, Write};
 #[cfg(desktop)]
 use std::process::{Command, Stdio};
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -80,43 +80,51 @@ pub fn normalize_external_agent_input(
       })
     }
     ExternalAgentKind::LocalCli => {
-      let clean_cmd = command.trim();
-      if clean_cmd.is_empty() {
-        return Err("CLI 命令不能为空（例如 claude 或 codex）".to_string());
+      #[cfg(not(desktop))]
+      {
+        let _ = (command, args, workdir, created_at_ms);
+        Err("移动端不支持运行本地 CLI 进程，请使用 OpenAI 兼容 API".to_string())
       }
-      if clean_cmd.contains('\n') || clean_cmd.contains('\r') || clean_cmd.contains('\0') {
-        return Err("CLI 命令包含非法控制字符".to_string());
+      #[cfg(desktop)]
+      {
+        let clean_cmd = command.trim();
+        if clean_cmd.is_empty() {
+          return Err("CLI 命令不能为空（例如 claude 或 codex）".to_string());
+        }
+        if clean_cmd.contains('\n') || clean_cmd.contains('\r') || clean_cmd.contains('\0') {
+          return Err("CLI 命令包含非法控制字符".to_string());
+        }
+        if clean_cmd.chars().count() > 260 {
+          return Err("CLI 命令长度不能超过 260 个字符".to_string());
+        }
+        let clean_args: Vec<String> = args
+          .into_iter()
+          .map(|s| s.trim().to_string())
+          .filter(|s| !s.is_empty())
+          .take(24)
+          .collect();
+        let clean_workdir = workdir
+          .map(str::trim)
+          .filter(|s| !s.is_empty())
+          .map(|s| s.chars().take(260).collect());
+        Ok(ExternalAgentRecord {
+          id: clean_id,
+          kind,
+          name: clean_name,
+          base_url: String::new(),
+          api_key: String::new(),
+          model: String::new(),
+          command: clean_cmd.to_string(),
+          args: clean_args,
+          workdir: clean_workdir,
+          created_at_ms: created_at_ms.unwrap_or_else(now_ms),
+        })
       }
-      if clean_cmd.chars().count() > 260 {
-        return Err("CLI 命令长度不能超过 260 个字符".to_string());
-      }
-      let clean_args: Vec<String> = args
-        .into_iter()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .take(24)
-        .collect();
-      let clean_workdir = workdir
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.chars().take(260).collect());
-      Ok(ExternalAgentRecord {
-        id: clean_id,
-        kind,
-        name: clean_name,
-        base_url: String::new(),
-        api_key: String::new(),
-        model: String::new(),
-        command: clean_cmd.to_string(),
-        args: clean_args,
-        workdir: clean_workdir,
-        created_at_ms: created_at_ms.unwrap_or_else(now_ms),
-      })
     }
   }
 }
 
-#[cfg_attr(not(desktop), allow(dead_code))]
+#[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
 pub fn build_openai_endpoint(base_url: &str) -> String {
   let clean = base_url.trim().trim_end_matches('/');
   if clean.ends_with("/chat/completions") {
@@ -126,9 +134,9 @@ pub fn build_openai_endpoint(base_url: &str) -> String {
   }
 }
 
-#[cfg_attr(not(desktop), allow(dead_code))]
+#[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
 pub fn extract_openai_sse_delta(line: &str) -> Option<String> {
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   {
     let trimmed = line.trim();
     let payload = trimmed.strip_prefix("data:")?.trim();
@@ -162,7 +170,7 @@ pub fn extract_openai_sse_delta(line: &str) -> Option<String> {
     }
     None
   }
-  #[cfg(not(desktop))]
+  #[cfg(not(any(desktop, target_os = "ios")))]
   {
     let _ = line;
     None
@@ -183,7 +191,7 @@ pub fn build_cli_args_and_stdin(args: &[String], prompt: &str) -> (Vec<String>, 
   }
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 pub async fn execute_openai_api_turn<F>(
   agent: &ExternalAgentRecord,
   system_prompt: &str,

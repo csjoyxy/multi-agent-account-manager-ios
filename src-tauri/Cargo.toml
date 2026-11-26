@@ -37,6 +37,9 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSView", "NSResponder"] }
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["objc2-app-kit", "WKHTTPCookieStore", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "block2"] }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "http2"] }
+
 [target.'cfg(windows)'.dependencies]
 tauri-runtime = "=2.12.3"
 webview2-com = "0.39"

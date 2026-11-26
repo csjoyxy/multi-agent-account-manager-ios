@@ -340,7 +340,7 @@ pub fn reset_overrides(app_data_dir: &Path) -> Result<SiteAdaptersSnapshot, Stri
   Ok(get_adapters_snapshot(app_data_dir))
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 pub const NET_HOOK_INIT_JS: &str = r#"(() => {
   try {
     if (window.__maamNet && window.__maamNet.installed) return;

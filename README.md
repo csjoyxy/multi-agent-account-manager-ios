@@ -2,7 +2,7 @@
 
 [![LINUX DO](https://img.shields.io/badge/Community-LINUX%20DO-0064e0?style=flat-square)](https://linux.do/)
 
-基于 Tauri 2 构建的跨平台（macOS / Windows / Android）AI 助手多账号隔离与快速切换工具，安装后应用名称为 **叠号**。
+基于 Tauri 2 构建的跨平台（macOS / Windows / iOS / Android）AI 助手多账号隔离与快速切换工具，安装后应用名称为 **叠号**。
 
 ## 支持服务与核心特性
 
@@ -10,32 +10,35 @@
 | --- | --- | --- |
 | **Muse · Meta** | 已启用 | 独立会话隔离、邮箱识别、额度明细与额外额度同步、Space 预览 |
 | **Hark** | 已启用 | 独立会话隔离、邮箱识别、每日/每月双上限额度同步 |
-| **外部 API / CLI Agent** | 群聊可用（桌面端） | 支持接入 OpenAI 兼容 API 与本地 CLI 工具参与混合群聊 |
+| **外部 API / CLI Agent** | 群聊可用（桌面端 & iOS） | 桌面端支持 OpenAI 兼容 API 与本地 CLI；iOS 端支持直连 OpenAI 兼容 API |
 
-- **原生级多账号隔离**：macOS 使用独立 UUID `WKWebsiteDataStore`，Windows 使用独立 WebView2 `UserDataFolder`，Android 使用独立 WebView `MULTI_PROFILE`。
-- **多账号群聊协作（桌面端）**：
-  - 支持创建/编辑/删除群聊，接入 Muse、Hark 与外部 OpenAI 兼容 API / 本地 CLI Agent 同群协作。
+- **原生级多账号隔离**：
+  - macOS 使用独立 UUID `WKWebsiteDataStore`，Windows 使用独立 WebView2 `UserDataFolder`，Android 使用独立 WebView `MULTI_PROFILE`。
+  - **iOS 双引擎兼容（iOS 16.0+，完美支持 iOS 16.4.1）**：iOS 17+ 原生调用 `WKWebsiteDataStore(forIdentifier:)`；iOS 16.0–16.7 自动启用按账号 UUID 隔离的内存 `WKWebsiteDataStore.nonPersistent()` 容器，并将 Cookie（含 `HttpOnly` 与会话级 Cookie）及各源 `localStorage` 持久化至应用沙盒 `Application Support/.../ios-profiles/<uuid>/`，重启应用后完整保留多账号登录态且互不串号。
+- **多账号群聊协作（桌面端 & iOS 端）**：
+  - 支持创建/编辑/删除群聊，接入 Muse、Hark 网页账号与外部 OpenAI 兼容 API（桌面端另支持本地 CLI Agent）同群协作；iPhone 采用「群列表 ↔ 聊天室」单栏导航，iPad 自动启用双栏分屏视图。
+  - iOS 端内置后台保活 `WKWebView` 池（`IosGroupWebViewPool`），支持后台并发流式生成回复、内存告警自动回收，以及从群聊「前往该账号授权」时零重载无缝复用实时 DOM 视图。
   - 支持 **并行讨论**、**评审流**、**A2A 接力** 三种协作模式，支持 `@成员`、`@渠道` 与 `@全体` 点名路由；按渠道自动选号时基于剩余额度智能选择并支持失败自动冷却切换。
   - 支持 **共享上下文 & 技能（Skills）**、**成员角色设定**、**沉淀本轮结论**、**新建话题**、**站点选择器适配器自定义覆盖** 等进阶编排能力。
 - **Cookie 导入登录与邮箱识别（全平台）**：
-  - 在「新增账号」弹窗或「账号设置」弹窗中粘贴 **JSON 数组**、**Netscape `cookies.txt`** 或 **HTTP `Cookie:` 请求头** 即可导入对应账号的独立隔离容器（macOS / Windows / Android 均支持）。
+  - 在「新增账号」弹窗或「账号设置」弹窗中粘贴 **JSON 数组**、**Netscape `cookies.txt`** 或 **HTTP `Cookie:` 请求头** 即可导入对应账号的独立隔离容器（macOS / Windows / iOS / Android 均支持）。
   - 创建时导入会在打开页面前校验并写入 Cookie，直接进入已登录状态。
   - 自动从 Cookie、页面数据及 Meta 账户中心（`accountscenter.meta.com`）提取真实邮箱；若导入的 Cookie 未包含 `.meta.com` 凭据且无法读取邮箱，账号将标记为「已登录账号」并在下方展示 **「未获取到邮箱 · 手动改名」** 快捷按钮。
-- **工具权限自动审批（桌面端）**：
-  - 在左下角 **设置** 中开启「自动审批权限请求（前台与后台保活账号）」后，当前页与后台已预热保活账号会自动识别授权卡片/弹窗，优先点击单次授权按钮（「允许一次」「允许」「批准」等），并严格拦截删除、注销、退出登录、支付、改密等高危操作。
+- **工具权限自动审批（桌面端 & iOS 端）**：
+  - 在 **设置** 中开启「自动审批权限请求」后，当前打开的账号页与群聊后台保活账号会自动识别授权卡片/弹窗，优先点击单次授权按钮（「允许一次」「允许」「批准」等），并严格拦截删除、注销、退出登录、支付、改密等高危操作。
 - **登录态校验与状态异常恢复**：
   - 主动与被动检测登录态有效性，掉线时自动清理失效会话；识别错误页或受限页并标红「状态异常」与一键 **清理重登**，群聊与自动选号会自动跳过异常账号。
 - **快捷切号、托盘、代理与深色模式**：
-  - 支持 `⌘1~9` / `Ctrl+1~9` 及 `⌘↑`/`⌘↓`/`⌘[`/`⌘]` 快捷切号，全局呼出/隐藏快捷键，关闭最小化到系统托盘，随系统切换深色模式。
-  - 支持每个账号独立 HTTP CONNECT 代理（`http://主机:端口`）及一键测速，展示认证 Cookie 剩余有效期，一键复制当前账号 Cookie，并支持客户端内 GitHub Releases `SHA-256` 校验覆盖更新。
+  - 桌面端支持 `⌘1~9` / `Ctrl+1~9` 及 `⌘↑`/`⌘↓`/`⌘[`/`⌘]` 快捷切号，全局呼出/隐藏快捷键，关闭最小化到系统托盘；全平台支持随系统切换深色模式。
+  - 支持每个账号独立 HTTP CONNECT 代理（`http://主机:端口`）及一键测速（iOS 17+ 按账号独立走代理，iOS 16 自动回退使用系统网络/VPN 并支持连接测速），展示认证 Cookie 剩余有效期，一键复制当前账号 Cookie，并支持客户端内检查 GitHub Releases 更新。
 
 ---
 
 ## 核心功能使用说明
 
-### 1. 多账号群聊协作（桌面端）
+### 1. 多账号群聊协作（桌面端 & iOS 端）
 
-1. 点击左侧栏 **「群聊」→「+ 创建群聊」**，勾选要参与的多平台账号或点击 **「API/CLI」** 添加外部模型/本地命令行工具。
+1. 桌面端点击左侧栏 **「群聊」**，iOS 端点击顶部 **「群聊」** 标签页，然后点击 **「+ 创建群聊 / + 新建」**，勾选要参与的多平台账号或添加外部 API（桌面端另支持 CLI）成员。
 2. 在顶部工具栏可设置 **共享上下文 & 技能**、编辑成员角色、**沉淀本轮结论**、开启 **新话题** 或配置 **站点适配器**。
 3. 在输入框下方选择 **并行 / 评审流 / A2A 接力** 模式，输入消息并用 `@成员`、`@渠道` 或 `全体成员` 发起协作提问。
 
@@ -86,15 +89,26 @@
 
 ## 下载与安装
 
-前往 [GitHub Releases](https://github.com/ldjx7/multi-agent-account-manager/releases) 下载对应平台安装包：
+前往 [GitHub Releases](https://github.com/csjoyxy/multi-agent-account-manager-ios/releases) 下载对应平台安装包：
 
 | 平台 | 下载文件 | 架构 / 系统要求 |
 | --- | --- | --- |
+| **iOS / iPadOS** | `account-manager-ios-unsigned.ipa` | arm64（**iOS 16.0+**，原生兼容 iOS 16.4.1 / iOS 17+） |
 | macOS | `account-manager-macos-universal.dmg` | Apple Silicon & Intel（macOS 14.0+） |
 | Windows | `account-manager-windows-x64-setup.exe` | x64（Windows 10 / 11） |
 | Android | `account-manager-android-universal-release.apk` | 通用 ABI（Android 7.0+） |
 
 > `account-manager-macos-universal.app.tar.gz` 仅用于 macOS 应用内自动更新，首次安装请下载 `.dmg`。
+
+### iOS 安装注意事项（iOS 16.0+ / iOS 16.4.1）
+
+1. **巨魔商店（TrollStore，强烈推荐 iOS 16.4.1 用户）**：
+   - iOS 16.4.1 支持安装 TrollStore 2，下载无签名安装包 `account-manager-ios-unsigned.ipa` 后直接分享至 **TrollStore** 即可永久安装，无 7 天过期限制。
+2. **个人 Apple ID 自签侧载（AltStore / SideStore / Sideloadly / 爱思助手）**：
+   - 若未使用 TrollStore，可将 `account-manager-ios-unsigned.ipa` 导入 **AltStore / SideStore / Sideloadly** 使用免费或付费 Apple ID 重签安装；首次打开若提示「不受信任的开发者」，前往「设置 → 通用 → VPN 与设备管理」信任对应开发者证书，并在 iOS 16+ 开启「设置 → 隐私与安全性 → 开发者模式」。
+3. **登录态与代理说明**：
+   - iOS 16.x 下各账号独立 Cookie 与 `localStorage` 保存在应用沙盒 `Library/Application Support/com.ldjx.accountmanager/ios-profiles/<uuid>/` 中，使用同一签名（或 TrollStore）覆盖安装升级时完整保留所有账号登录态与群聊记录。
+   - 受系统 WebKit 接口限制，按账号独立 HTTP CONNECT 代理需 iOS 17.0+ 生效；iOS 16.x 系统会自动回退使用手机全局网络 / VPN 工具（如 Shadowrocket / Loon / Stash）。
 
 ### macOS 安装注意事项
 
@@ -138,38 +152,41 @@
 
 1. **允许安装未知来源应用**：首次安装 `.apk` 以及使用应用内更新时，系统会要求授予「允许安装未知来源应用」权限，授权后返回即可调起系统安装器覆盖更新。
 2. **WebView 内核要求**：多账号隔离依赖 Android System WebView 的 `MULTI_PROFILE` 能力；如提示不支持，请在应用商店或系统更新中升级 Android System WebView（或 Chrome）。
-3. **签名一致说明**：所有 Release APK 均使用固定发布密钥签名，可直接覆盖升级并完整保留多账号登录态。
+3. **签名一致说明**：若在 Fork 仓库发布，可在仓库 `Settings → Secrets and variables → Actions` 配置 `ANDROID_KEYSTORE_BASE64` 等签名密钥；未配置时 CI 会自动生成临时签名密钥以保证全平台发版流水线畅通。
 
 ---
 
-## 应用内更新与发版
+## 应用内更新与 GitHub Actions 构建发版
 
-- **客户端检查更新**：桌面端点击左侧栏底部「更新」按钮，Android 端点击右上角下载图标，可检查最新版本并一键下载校验安装；启动后也会静默检查一次并展示红点提醒。
-- **维护者发布新版本**：
+- **客户端检查更新**：桌面端点击左侧栏底部「更新」按钮，iOS / Android 端点击右上角下载图标，可检查最新版本（iOS 端点击「前往下载 IPA」直达最新无签名 IPA）。
+- **单独快速构建 iOS IPA（推荐日常验证）**：
+  - 在 GitHub 仓库进入 **Actions → `Build iOS IPA` → `Run workflow`**，约 10 分钟即可编译生成兼容 iOS 16.0+ 的 `account-manager-ios-unsigned.ipa` 构建产物；勾选 `publish_release` 还可直接创建或更新 GitHub Release。
+- **全平台自动发版**：
   1. 同步更新 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json` 中的应用版本号。
-  2. 提交并推送 `v*` 标签（GitHub Actions 将自动编译三端安装包、生成 `latest.json` 并创建 Release）：
+  2. 提交并推送 `v*` 标签（GitHub Actions 将自动编译 iOS / macOS / Windows / Android 四端安装包、生成 `latest.json` 并创建 Release）：
 
      ```bash
-     git tag v0.1.1
-     git push origin v0.1.1
+     git tag v0.1.11
+     git push origin v0.1.11
      ```
 
 ---
 
 ## 本地开发
 
-环境要求：Node.js 22+、Rust 1.85+，Android 构建需额外配置 Android SDK 与 NDK 26+。
+环境要求：Node.js 22+、Rust 1.85+；iOS 构建需 macOS + Xcode 15/16 + `xcodegen`；Android 构建需额外配置 Android SDK 与 NDK 26+。
 
 ```bash
 npm ci
 npm run tauri -- dev
-npm run tauri -- build
+# macOS 下本地打包 iOS 16.0+ 无签名 IPA：
+bash scripts/build-ios-ipa.sh
 ```
 
 ---
 
 ## 社区与开源协议
 
-本项目已加入并致谢 [LINUX DO](https://linux.do/) 开源社区。
+本项目 Fork 自 [ldjx7/multi-agent-account-manager](https://github.com/ldjx7/multi-agent-account-manager)，已加入并致谢 [LINUX DO](https://linux.do/) 开源社区。
 
 本项目基于 [Apache-2.0](LICENSE) 协议开源。

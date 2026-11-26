@@ -1,5 +1,5 @@
 use crate::group_transport;
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 use crate::group_transport::ResolvedMemberTransport;
 use crate::platform::{self, current_platform_name, ProxyTestResult};
 use crate::providers::{
@@ -8,12 +8,12 @@ use crate::providers::{
 };
 #[cfg(desktop)]
 use crate::providers::{is_verified_callback_origin, ProviderSpec};
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 use crate::site_adapters::SiteAdapterConfig;
 use crate::site_adapters::{self, SiteAdaptersSnapshot};
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 use crate::storage::GroupChatMessage;
-#[cfg(any(desktop, test))]
+#[cfg(any(desktop, target_os = "ios", test))]
 use crate::storage::GroupThreadBinding;
 use crate::storage::{
   detect_conflicts, load_or_migrate_store, normalize_uuid, now_ms, save_store_atomic, AccountKey,
@@ -37,13 +37,13 @@ use uuid::Uuid;
 
 pub const APP_TITLE: &str = "叠号";
 const MAX_GROUP_MEMBERS: usize = 30;
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 const REVIEW_INLINE_CHAR_LIMIT: usize = 1200;
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 const REVIEW_FALLBACK_CHAR_LIMIT: usize = 4500;
-#[cfg_attr(not(desktop), allow(dead_code))]
+#[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
 const AUTO_ROUTE_STICKY_MAX_USED_PCT: u8 = 85;
-#[cfg_attr(not(desktop), allow(dead_code))]
+#[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
 const AUTO_ROUTE_COOLDOWN_MS: u64 = 120_000;
 #[cfg(desktop)]
 const LEFT_PANE_WIDTH: f64 = 380.0;
@@ -51,12 +51,14 @@ const LEFT_PANE_WIDTH: f64 = 380.0;
 const MAX_WARM_DESKTOP_VIEWS: usize = 10;
 #[cfg(desktop)]
 const GROUP_MAX_CONCURRENT_WORKERS: usize = 6;
+#[cfg(target_os = "ios")]
+const GROUP_MAX_CONCURRENT_WORKERS: usize = 3;
 #[cfg(desktop)]
 const GROUP_IDLE_RECLAIM_MS: u64 = 10 * 60 * 1000;
 #[cfg(desktop)]
 const MAX_CONCURRENT_PREWARMS: usize = 2;
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 const BACKGROUND_RAF_INIT_JS: &str = r#"(() => {
   try {
     if (window.__maamRafInstalled) return;
@@ -1630,7 +1632,7 @@ const IDENTITY_PROBE_JS: &str = r#"(() => {
   }
 })()"#;
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 fn build_new_chat_click_js(adapter: &SiteAdapterConfig) -> String {
   let adapter_json = serde_json::to_string(adapter).unwrap_or_else(|_| "{}".to_string());
   r#"(() => {
@@ -1657,7 +1659,7 @@ fn build_new_chat_click_js(adapter: &SiteAdapterConfig) -> String {
     .replace("__ADAPTER__", &adapter_json)
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 #[derive(Debug, Clone)]
 struct GroupAttachment {
   filename: String,
@@ -1665,7 +1667,7 @@ struct GroupAttachment {
   content: String,
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 fn build_group_attach_file_js(adapter: &SiteAdapterConfig, attachment: &GroupAttachment) -> String {
   let adapter_json = serde_json::to_string(adapter).unwrap_or_else(|_| "{}".to_string());
   let name_json = serde_json::to_string(&attachment.filename).unwrap_or_else(|_| "\"draft.md\"".to_string());
@@ -1778,7 +1780,7 @@ fn build_group_attach_file_js(adapter: &SiteAdapterConfig, attachment: &GroupAtt
     .replace("__CONTENT__", &content_json)
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 fn build_group_check_attached_js(adapter: &SiteAdapterConfig, filename: &str) -> String {
   let adapter_json = serde_json::to_string(adapter).unwrap_or_else(|_| "{}".to_string());
   let name_json = serde_json::to_string(filename).unwrap_or_else(|_| "\"\"".to_string());
@@ -1823,7 +1825,7 @@ fn build_group_check_attached_js(adapter: &SiteAdapterConfig, filename: &str) ->
     .replace("__FILENAME__", &name_json)
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 fn build_hark_click_preview_card_js(preview_text: &str) -> String {
   let prev_json = serde_json::to_string(preview_text).unwrap_or_else(|_| "\"\"".to_string());
   r#"(() => {
@@ -1914,7 +1916,7 @@ fn build_hark_click_preview_card_js(preview_text: &str) -> String {
     .replace("__PREVIEW__", &prev_json)
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 fn build_hark_read_expanded_js(card_preview: &str) -> String {
   let card_json = serde_json::to_string(card_preview).unwrap_or_else(|_| "\"\"".to_string());
   r#"(() => {
@@ -2003,7 +2005,7 @@ fn build_hark_read_expanded_js(card_preview: &str) -> String {
     .replace("__CARD_PREVIEW__", &card_json)
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 fn build_hark_close_expanded_js() -> String {
   r#"(() => {
   try {
@@ -2028,7 +2030,7 @@ fn build_hark_close_expanded_js() -> String {
     .to_string()
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 fn build_group_send_js(adapter: &SiteAdapterConfig, job_id: &str, prompt_text: &str) -> String {
   let adapter_json = serde_json::to_string(adapter).unwrap_or_else(|_| "{}".to_string());
   let job_json = serde_json::to_string(job_id).unwrap_or_else(|_| "\"\"".to_string());
@@ -2558,7 +2560,7 @@ fn build_group_send_js(adapter: &SiteAdapterConfig, job_id: &str, prompt_text: &
     .replace("__PROMPT__", &prompt_json)
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 fn build_group_poll_js(adapter: &SiteAdapterConfig, job_id: &str) -> String {
   let adapter_json = serde_json::to_string(adapter).unwrap_or_else(|_| "{}".to_string());
   let job_json = serde_json::to_string(job_id).unwrap_or_else(|_| "\"\"".to_string());
@@ -3301,7 +3303,7 @@ fn build_group_poll_js(adapter: &SiteAdapterConfig, job_id: &str) -> String {
     .replace("__JOB_ID__", &job_json)
 }
 
-#[cfg(desktop)]
+#[cfg(any(desktop, target_os = "ios"))]
 fn build_group_sync_latest_js(adapter: &SiteAdapterConfig, raw_user_content: &str) -> String {
   let adapter_json = serde_json::to_string(adapter).unwrap_or_else(|_| "{}".to_string());
   let query_json = serde_json::to_string(raw_user_content).unwrap_or_else(|_| "\"\"".to_string());
@@ -3919,6 +3921,118 @@ fn evaluate_account_quota(acc: &AccountRecord) -> AccountQuotaEval {
   }
 }
 
+#[cfg(any(desktop, target_os = "ios"))]
+enum GroupWebviewHandle {
+  #[cfg(desktop)]
+  Desktop(tauri::Webview),
+  #[cfg(target_os = "ios")]
+  Ios {
+    app: AppHandle,
+    key: AccountKey,
+  },
+}
+
+#[cfg(any(desktop, target_os = "ios"))]
+impl GroupWebviewHandle {
+  async fn eval_json(&self, js: &str) -> Option<serde_json::Value> {
+    match self {
+      #[cfg(desktop)]
+      Self::Desktop(wv) => SessionManager::eval_json_callback(wv, js).await,
+      #[cfg(target_os = "ios")]
+      Self::Ios { app, key } => {
+        let resp = tokio::time::timeout(
+          std::time::Duration::from_millis(6000),
+          platform::mobile::eval_group_webview_js(app, key.provider_id.as_str(), &key.uuid, js),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        if !resp.exists {
+          return None;
+        }
+        let raw = resp.value_json?;
+        if let Ok(inner_json) = serde_json::from_str::<String>(&raw) {
+          if let Ok(val) = serde_json::from_str::<serde_json::Value>(&inner_json) {
+            return Some(val);
+          }
+        }
+        serde_json::from_str::<serde_json::Value>(&raw).ok()
+      }
+    }
+  }
+
+  async fn current_url(&self) -> Option<Url> {
+    match self {
+      #[cfg(desktop)]
+      Self::Desktop(wv) => wv.url().ok(),
+      #[cfg(target_os = "ios")]
+      Self::Ios { app, key } => {
+        let st = platform::mobile::get_group_webview_state(
+          app,
+          key.provider_id.as_str(),
+          &key.uuid,
+        )
+        .await
+        .ok()?;
+        if !st.exists {
+          return None;
+        }
+        st.url.and_then(|u| Url::parse(&u).ok())
+      }
+    }
+  }
+
+  async fn navigate(&self, url: Url) -> Result<(), String> {
+    match self {
+      #[cfg(desktop)]
+      Self::Desktop(wv) => wv.navigate(url).map_err(|e| e.to_string()),
+      #[cfg(target_os = "ios")]
+      Self::Ios { app, key } => {
+        platform::mobile::navigate_group_webview(
+          app,
+          key.provider_id.as_str(),
+          &key.uuid,
+          url.as_str(),
+        )
+        .await
+      }
+    }
+  }
+
+  async fn reload(&self) {
+    match self {
+      #[cfg(desktop)]
+      Self::Desktop(wv) => {
+        let _ = wv.eval("window.location.reload()");
+      }
+      #[cfg(target_os = "ios")]
+      Self::Ios { app, key } => {
+        let _ = platform::mobile::reload_group_webview(
+          app,
+          key.provider_id.as_str(),
+          &key.uuid,
+        )
+        .await;
+      }
+    }
+  }
+
+  async fn is_alive(&self, app: &AppHandle) -> bool {
+    match self {
+      #[cfg(desktop)]
+      Self::Desktop(wv) => app.get_webview(wv.label()).is_some(),
+      #[cfg(target_os = "ios")]
+      Self::Ios { app: ios_app, key } => {
+        let _ = app;
+        platform::mobile::get_group_webview_state(ios_app, key.provider_id.as_str(), &key.uuid)
+          .await
+          .map(|s| s.exists)
+          .unwrap_or(false)
+      }
+    }
+  }
+}
+
 struct InnerState {
   store_path: PathBuf,
   app_data_dir: PathBuf,
@@ -3929,21 +4043,23 @@ struct InnerState {
   last_active_per_provider: HashMap<ProviderId, AccountKey>,
   #[cfg(desktop)]
   warm_pool: HashMap<AccountKey, WarmDesktopEntry>,
+  #[cfg(target_os = "ios")]
+  ios_warm_views: HashMap<AccountKey, u64>,
   #[cfg(desktop)]
   prewarm_failed: HashSet<AccountKey>,
   #[cfg(desktop)]
   cookie_checked_at: HashMap<AccountKey, u64>,
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   in_flight_group_members: HashMap<AccountKey, usize>,
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   group_context_synced: HashMap<(String, AccountKey), (u64, u64)>,
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   group_member_locks: HashMap<AccountKey, Arc<tokio::sync::Mutex<()>>>,
-  #[cfg_attr(not(desktop), allow(dead_code))]
+  #[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
   group_channel_last_account: HashMap<(String, ProviderId), AccountKey>,
-  #[cfg_attr(not(desktop), allow(dead_code))]
+  #[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
   account_last_assigned_ms: HashMap<AccountKey, u64>,
-  #[cfg_attr(not(desktop), allow(dead_code))]
+  #[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
   account_cooldown_until_ms: HashMap<AccountKey, u64>,
   account_page_errors: HashMap<AccountKey, String>,
   cookie_identity_hints: HashMap<AccountKey, String>,
@@ -3966,7 +4082,7 @@ pub struct SessionManager {
   download_counter: AtomicU64,
   #[cfg(desktop)]
   recent_downloads: std::sync::Mutex<HashMap<u64, PathBuf>>,
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   group_worker_semaphore: Arc<tokio::sync::Semaphore>,
   inner: Mutex<InnerState>,
 }
@@ -3998,7 +4114,7 @@ impl SessionManager {
       download_counter: AtomicU64::new(1),
       #[cfg(desktop)]
       recent_downloads: std::sync::Mutex::new(HashMap::new()),
-      #[cfg(desktop)]
+      #[cfg(any(desktop, target_os = "ios"))]
       group_worker_semaphore: Arc::new(tokio::sync::Semaphore::new(GROUP_MAX_CONCURRENT_WORKERS)),
       inner: Mutex::new(InnerState {
         store_path,
@@ -4010,15 +4126,17 @@ impl SessionManager {
         last_active_per_provider: HashMap::new(),
         #[cfg(desktop)]
         warm_pool: HashMap::new(),
+        #[cfg(target_os = "ios")]
+        ios_warm_views: HashMap::new(),
         #[cfg(desktop)]
         prewarm_failed: HashSet::new(),
         #[cfg(desktop)]
         cookie_checked_at: HashMap::new(),
-        #[cfg(desktop)]
+        #[cfg(any(desktop, target_os = "ios"))]
         in_flight_group_members: HashMap::new(),
-        #[cfg(desktop)]
+        #[cfg(any(desktop, target_os = "ios"))]
         group_context_synced: HashMap::new(),
-        #[cfg(desktop)]
+        #[cfg(any(desktop, target_os = "ios"))]
         group_member_locks: HashMap::new(),
         group_channel_last_account: HashMap::new(),
         account_last_assigned_ms: HashMap::new(),
@@ -4095,7 +4213,10 @@ impl SessionManager {
       .map(|e| e.account_key.clone())
       .collect::<Vec<_>>();
 
-    #[cfg(not(desktop))]
+    #[cfg(target_os = "ios")]
+    let warm_accounts = locked.ios_warm_views.keys().cloned().collect::<Vec<_>>();
+
+    #[cfg(all(not(desktop), not(target_os = "ios")))]
     let warm_accounts = Vec::new();
 
     let providers = all_provider_infos();
@@ -4181,6 +4302,11 @@ impl SessionManager {
         Ok(())
       });
       let _ = crate::platform::mobile::subscribe_events(app, channel).await;
+      #[cfg(target_os = "ios")]
+      {
+        let initial_auto = self.auto_approve.load(Ordering::SeqCst);
+        let _ = crate::platform::mobile::set_auto_approve(app, initial_auto).await;
+      }
     }
 
     self.retry_pending_cleanups(app).await;
@@ -4926,6 +5052,17 @@ impl SessionManager {
       }
     }
 
+    #[cfg(target_os = "ios")]
+    if proxy_changed || timezone_changed {
+      let key = AccountKey {
+        provider_id: provider_id.clone(),
+        uuid: uuid.clone(),
+      };
+      locked.ios_warm_views.remove(&key);
+      locked.group_context_synced.retain(|(_, k), _| k != &key);
+      let _ = platform::mobile::discard_group_webview(app, provider_id.as_str(), &uuid).await;
+    }
+
     if let Some(slot) = &locked.active_slot {
       if slot.committed && slot.account_key.provider_id == provider_id && slot.account_key.uuid == uuid {
         let title = format!("{} · {}", spec.info.short_name, locked.store.accounts[index].alias);
@@ -5321,6 +5458,11 @@ impl SessionManager {
       let snap = {
         let mut locked = self.inner.lock().await;
         locked.account_page_errors.remove(&key);
+        #[cfg(target_os = "ios")]
+        {
+          locked.ios_warm_views.remove(&key);
+          locked.group_context_synced.retain(|(_, k), _| k != &key);
+        }
         if let Some(hint) = cookie_hint {
           locked.cookie_identity_hints.insert(key.clone(), hint);
         }
@@ -5384,7 +5526,7 @@ impl SessionManager {
           .thread_bindings
           .retain(|tb| !(tb.member.provider_id == provider_id && tb.member.uuid == uuid));
       }
-      #[cfg(desktop)]
+      #[cfg(any(desktop, target_os = "ios"))]
       locked
         .group_context_synced
         .retain(|(_, k), _| !(k.provider_id == provider_id && k.uuid == uuid));
@@ -5423,11 +5565,20 @@ impl SessionManager {
           false
         }
       }
-      #[cfg(not(desktop))]
+      #[cfg(target_os = "ios")]
+      {
+        locked.ios_warm_views.remove(&key).is_some()
+      }
+      #[cfg(all(not(desktop), not(target_os = "ios")))]
       {
         false
       }
     };
+
+    #[cfg(target_os = "ios")]
+    if closed_desktop_view {
+      let _ = platform::mobile::discard_group_webview(app, key.provider_id.as_str(), &key.uuid).await;
+    }
 
     if closed_desktop_view {
       tokio::time::sleep(std::time::Duration::from_millis(120)).await;
@@ -5565,17 +5716,29 @@ impl SessionManager {
 
     #[cfg(not(desktop))]
     {
+      #[cfg(not(target_os = "ios"))]
       let _ = app;
-      let locked = self.inner.lock().await;
-      if !locked
-        .store
-        .accounts
-        .iter()
-        .any(|a| a.provider_id == key.provider_id && a.uuid == key.uuid)
-      {
-        return Err("未找到对应的账号记录".to_string());
-      }
-      Ok(Self::snapshot_from_locked(&locked))
+      let snap = {
+        let mut locked = self.inner.lock().await;
+        if !locked
+          .store
+          .accounts
+          .iter()
+          .any(|a| a.provider_id == key.provider_id && a.uuid == key.uuid)
+        {
+          return Err("未找到对应的账号记录".to_string());
+        }
+        locked.account_page_errors.remove(&key);
+        #[cfg(target_os = "ios")]
+        {
+          locked.ios_warm_views.remove(&key);
+          locked.group_context_synced.retain(|(_, k), _| k != &key);
+        }
+        Self::snapshot_from_locked(&locked)
+      };
+      #[cfg(target_os = "ios")]
+      let _ = platform::mobile::discard_group_webview(app, key.provider_id.as_str(), &key.uuid).await;
+      Ok(snap)
     }
   }
 
@@ -5640,11 +5803,21 @@ impl SessionManager {
           false
         }
       };
-      #[cfg(not(desktop))]
+      #[cfg(target_os = "ios")]
+      let closed = {
+        locked.group_context_synced.retain(|(_, k), _| k != &key);
+        locked.ios_warm_views.remove(&key).is_some()
+      };
+      #[cfg(all(not(desktop), not(target_os = "ios")))]
       let closed = false;
 
       (active_matches, closed)
     };
+
+    #[cfg(target_os = "ios")]
+    if closed_desktop_view {
+      let _ = platform::mobile::discard_group_webview(app, key.provider_id.as_str(), &key.uuid).await;
+    }
 
     if closed_desktop_view {
       tokio::time::sleep(std::time::Duration::from_millis(150)).await;
@@ -5705,6 +5878,7 @@ impl SessionManager {
 
     #[cfg(not(desktop))]
     let (global_shortcut_active, global_shortcut_error) = {
+      #[cfg(not(target_os = "ios"))]
       let _ = app;
       (false, None)
     };
@@ -5748,7 +5922,12 @@ impl SessionManager {
         }
       }
     }
-    #[cfg(not(desktop))]
+    #[cfg(target_os = "ios")]
+    {
+      let _ = warm_labels;
+      let _ = platform::mobile::set_auto_approve(app, next_auto_approve).await;
+    }
+    #[cfg(all(not(desktop), not(target_os = "ios")))]
     let _ = warm_labels;
 
     Ok(snap)
@@ -6300,8 +6479,7 @@ impl SessionManager {
 
     #[cfg(mobile)]
     {
-      let view_instance_id = self.view_counter.fetch_add(1, Ordering::SeqCst);
-      let account_record = {
+      let (account_record, view_instance_id) = {
         let mut locked = self.inner.lock().await;
         if !locked.conflicts.is_empty() {
           return Err("存在 UUID 归属冲突，已停留在管理页".to_string());
@@ -6328,11 +6506,24 @@ impl SessionManager {
           return Ok(Self::snapshot_from_locked(&locked));
         };
         platform::parse_account_proxy(acc.proxy_url.as_deref().unwrap_or_default())?;
-        locked.active_group_id = None;
-        locked.selected_provider_id = key.provider_id;
+        #[cfg(not(target_os = "ios"))]
+        {
+          locked.active_group_id = None;
+        }
+        if locked.active_group_id.is_none() {
+          locked.selected_provider_id = key.provider_id.clone();
+        }
         locked.notice = None;
         self.hide_foreground_slot(app, next_seq, &mut locked).await;
-        acc
+        #[cfg(target_os = "ios")]
+        let vid = locked
+          .ios_warm_views
+          .get(&key)
+          .copied()
+          .unwrap_or_else(|| self.view_counter.fetch_add(1, Ordering::SeqCst));
+        #[cfg(not(target_os = "ios"))]
+        let vid = self.view_counter.fetch_add(1, Ordering::SeqCst);
+        (acc, vid)
       };
 
       self
@@ -7589,7 +7780,7 @@ impl SessionManager {
     if !caps.multi_profile_supported {
       let mut locked = self.inner.lock().await;
       #[cfg(target_os = "ios")]
-      let msg = "当前系统 WKWebView 不支持独立会话隔离（需 iOS 17+）";
+      let msg = "当前系统 WKWebView 不支持独立会话隔离（需 iOS 16.0+）";
       #[cfg(not(target_os = "ios"))]
       let msg = "当前设备系统 WebView 不支持 MULTI_PROFILE 多资料隔离，请先更新 Android System WebView 后重试";
       locked.notice = Some(msg.to_string());
@@ -7614,6 +7805,8 @@ impl SessionManager {
       }
       let spec = resolve_provider(&account.provider_id)
         .ok_or_else(|| "未找到对应的服务配置".to_string())?;
+      #[cfg(target_os = "ios")]
+      locked.ios_warm_views.insert(key.clone(), view_instance_id);
       locked.active_slot = Some(ActiveSessionSlot {
         account_key: key,
         view_instance_id,
@@ -8490,7 +8683,21 @@ impl SessionManager {
         .map(|e| e.view_instance_id == view_instance_id)
         .unwrap_or(false)
     }
-    #[cfg(not(desktop))]
+    #[cfg(target_os = "ios")]
+    {
+      let fg_ok = locked
+        .active_slot
+        .as_ref()
+        .map(|s| s.account_key == *key && s.view_instance_id == view_instance_id)
+        .unwrap_or(false);
+      let warm_ok = locked
+        .ios_warm_views
+        .get(key)
+        .map(|&vid| vid == view_instance_id)
+        .unwrap_or(false);
+      fg_ok || warm_ok
+    }
+    #[cfg(all(not(desktop), not(target_os = "ios")))]
     {
       locked
         .active_slot
@@ -8500,7 +8707,7 @@ impl SessionManager {
     }
   }
 
-  #[cfg_attr(not(desktop), allow(dead_code))]
+  #[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
   fn apply_page_error_state_locked(
     locked: &mut InnerState,
     key: AccountKey,
@@ -8526,7 +8733,7 @@ impl SessionManager {
     Some(Self::snapshot_from_locked(locked))
   }
 
-  #[cfg_attr(not(desktop), allow(dead_code))]
+  #[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
   async fn apply_page_error_state(
     &self,
     app: &AppHandle,
@@ -8921,7 +9128,7 @@ impl SessionManager {
     (became_authenticated, needs_cookie_check)
   }
 
-  #[cfg(any(desktop, test))]
+  #[cfg(any(desktop, target_os = "ios", test))]
   fn resolve_member_alias_locked(locked: &InnerState, key: &AccountKey) -> Option<String> {
     if key.provider_id.is_external() {
       locked
@@ -9210,7 +9417,7 @@ impl SessionManager {
     }
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   fn compute_group_knowledge_fingerprint(group: &GroupChatRecord, member: &AccountKey) -> u64 {
     use std::hash::{Hash, Hasher};
 
@@ -9362,7 +9569,7 @@ impl SessionManager {
         return Err(err);
       }
 
-      #[cfg(desktop)]
+      #[cfg(any(desktop, target_os = "ios"))]
       locked
         .group_context_synced
         .retain(|(gid, k), _| gid != &group_id || valid_members.contains(k));
@@ -9463,7 +9670,7 @@ impl SessionManager {
       return Err(err);
     }
 
-    #[cfg(desktop)]
+    #[cfg(any(desktop, target_os = "ios"))]
     locked
       .group_context_synced
       .retain(|(gid, _), _| gid != &group_id);
@@ -9508,7 +9715,7 @@ impl SessionManager {
       return Err(err);
     }
 
-    #[cfg(desktop)]
+    #[cfg(any(desktop, target_os = "ios"))]
     locked
       .group_context_synced
       .retain(|(gid, _), _| gid != &group_id);
@@ -9534,7 +9741,7 @@ impl SessionManager {
         locked.store.group_chats.insert(idx, removed);
         return Err(err);
       }
-      #[cfg(desktop)]
+      #[cfg(any(desktop, target_os = "ios"))]
       locked
         .group_context_synced
         .retain(|(gid, _), _| gid != &group_id);
@@ -9653,7 +9860,7 @@ impl SessionManager {
       return Err(err);
     }
 
-    #[cfg(desktop)]
+    #[cfg(any(desktop, target_os = "ios"))]
     locked
       .group_context_synced
       .retain(|(_, k), _| k != &removed_key);
@@ -9714,7 +9921,7 @@ impl SessionManager {
       locked.store.group_chats[idx].thread_bindings = prev_bindings;
       return Err(err);
     }
-    #[cfg(desktop)]
+    #[cfg(any(desktop, target_os = "ios"))]
     locked
       .group_context_synced
       .remove(&(group_id, target_key));
@@ -9764,7 +9971,7 @@ impl SessionManager {
       locked.store.group_chats[idx].messages = prev;
       return Err(err);
     }
-    #[cfg(desktop)]
+    #[cfg(any(desktop, target_os = "ios"))]
     locked
       .group_context_synced
       .retain(|(gid, _), _| gid != &group_id);
@@ -9804,7 +10011,7 @@ impl SessionManager {
       g.shared_context = prev_ctx;
       return Err(err);
     }
-    #[cfg(desktop)]
+    #[cfg(any(desktop, target_os = "ios"))]
     locked
       .group_context_synced
       .retain(|(gid, _), _| gid != &group_id);
@@ -9814,7 +10021,7 @@ impl SessionManager {
     Ok(Self::snapshot_from_locked(&locked))
   }
 
-  #[cfg_attr(not(desktop), allow(dead_code))]
+  #[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
   fn collect_group_eligible_members_locked(
     locked: &InnerState,
     g_idx: usize,
@@ -9847,7 +10054,7 @@ impl SessionManager {
     eligible_members
   }
 
-  #[cfg_attr(not(desktop), allow(dead_code))]
+  #[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
   fn channel_display_label_locked(_locked: &InnerState, channel_pid: &ProviderId) -> String {
     if channel_pid.is_api() {
       return "OpenAI API".to_string();
@@ -9860,7 +10067,7 @@ impl SessionManager {
       .unwrap_or_else(|| channel_pid.as_str().to_string())
   }
 
-  #[cfg_attr(not(desktop), allow(dead_code))]
+  #[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
   fn select_auto_channel_account_locked(
     locked: &InnerState,
     group_id: &str,
@@ -9932,14 +10139,14 @@ impl SessionManager {
         continue;
       }
 
-      #[cfg(desktop)]
+      #[cfg(any(desktop, target_os = "ios"))]
       let in_flight = locked
         .in_flight_group_members
         .get(&key)
         .copied()
         .unwrap_or(0)
         > 0;
-      #[cfg(not(desktop))]
+      #[cfg(not(any(desktop, target_os = "ios")))]
       let in_flight = false;
 
       let msg_busy = group_messages.iter().any(|m| {
@@ -10000,7 +10207,7 @@ impl SessionManager {
     Ok((best.key.clone(), best.alias.clone()))
   }
 
-  #[cfg_attr(not(desktop), allow(dead_code))]
+  #[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
   fn resolve_group_dispatch_targets_locked(
     locked: &mut InnerState,
     group_id: &str,
@@ -10126,13 +10333,13 @@ impl SessionManager {
     target_members: Option<Vec<AccountKey>>,
     auto_channels: Option<Vec<String>>,
   ) -> Result<ManagerSnapshot, String> {
-    #[cfg(not(desktop))]
+    #[cfg(not(any(desktop, target_os = "ios")))]
     {
       let _ = (app, group_id, content, target_members, auto_channels);
-      Err("群聊功能暂仅支持桌面端".to_string())
+      Err("群聊功能暂不支持当前平台".to_string())
     }
 
-    #[cfg(desktop)]
+    #[cfg(any(desktop, target_os = "ios"))]
     {
       let trimmed = content.trim().to_string();
       if trimmed.is_empty() {
@@ -10317,7 +10524,7 @@ impl SessionManager {
     }
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   #[allow(clippy::too_many_arguments)]
   async fn run_group_member_turn_with_failover(
     self: &Arc<Self>,
@@ -10379,7 +10586,7 @@ impl SessionManager {
           .is_some_and(|m| m.content.trim().is_empty());
         if !can_failover {
           return None;
-        }
+        };
         let eligible_members = Self::collect_group_eligible_members_locked(&locked, g_idx);
         let excluded = [member_key.clone()];
         let Ok((next_key, next_alias)) = Self::select_auto_channel_account_locked(
@@ -10464,13 +10671,13 @@ impl SessionManager {
     group_id: String,
     msg_id: String,
   ) -> Result<ManagerSnapshot, String> {
-    #[cfg(not(desktop))]
+    #[cfg(not(any(desktop, target_os = "ios")))]
     {
       let _ = (app, group_id, msg_id);
-      Err("群聊功能暂仅支持桌面端".to_string())
+      Err("群聊功能暂不支持当前平台".to_string())
     }
 
-    #[cfg(desktop)]
+    #[cfg(any(desktop, target_os = "ios"))]
     {
       let (snap, member_key, user_msg_id, raw_content, stage_label, hop_depth, auto_ch) = {
         let mut locked = self.inner.lock().await;
@@ -10593,13 +10800,13 @@ impl SessionManager {
     group_id: String,
     msg_id: String,
   ) -> Result<ManagerSnapshot, String> {
-    #[cfg(not(desktop))]
+    #[cfg(not(any(desktop, target_os = "ios")))]
     {
       let _ = (app, group_id, msg_id);
-      Err("群聊功能暂仅支持桌面端".to_string())
+      Err("群聊功能暂不支持当前平台".to_string())
     }
 
-    #[cfg(desktop)]
+    #[cfg(any(desktop, target_os = "ios"))]
     {
       let (member_key, raw_user_content, app_data_dir) = {
         let locked = self.inner.lock().await;
@@ -10660,15 +10867,16 @@ impl SessionManager {
       Self::wake_and_settle_group_webview(&wv).await;
 
       let host = wv
-        .url()
-        .ok()
+        .current_url()
+        .await
         .and_then(|u| u.host_str().map(|s| s.to_ascii_lowercase()))
         .unwrap_or_default();
       let adapter = site_adapters::resolve_adapter_for_host(&app_data_dir, &host);
       let is_hark = host.contains("hark.com");
 
       let sync_js = build_group_sync_latest_js(&adapter, &raw_user_content);
-      let res = Self::eval_json_callback(&wv, &sync_js)
+      let res = wv
+        .eval_json(&sync_js)
         .await
         .ok_or_else(|| "读取该账号页面内容超时，请前往原生页面确认后重试".to_string())?;
       let raw_text = res
@@ -10751,7 +10959,7 @@ impl SessionManager {
     serde_json::from_str::<serde_json::Value>(&raw).ok()
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   async fn update_group_message_state(
     &self,
     app: &AppHandle,
@@ -10801,25 +11009,84 @@ impl SessionManager {
     }
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   async fn ensure_group_member_webview_ready(
     self: &Arc<Self>,
     app: &AppHandle,
     key: &AccountKey,
-  ) -> Result<(tauri::Webview, u64), String> {
-    let account_to_start = {
-      let mut locked = self.inner.lock().await;
-      if let Some(entry) = locked.warm_pool.get_mut(key) {
-        if entry.paint_ready {
-          entry.last_used_ms = now_ms();
-          let vid = entry.view_instance_id;
-          let label = entry.webview_label.clone();
-          if let Some(wv) = app.get_webview(&label) {
-            return Ok((wv, vid));
+  ) -> Result<(GroupWebviewHandle, u64), String> {
+    #[cfg(desktop)]
+    {
+      let account_to_start = {
+        let mut locked = self.inner.lock().await;
+        if let Some(entry) = locked.warm_pool.get_mut(key) {
+          if entry.paint_ready {
+            entry.last_used_ms = now_ms();
+            let vid = entry.view_instance_id;
+            let label = entry.webview_label.clone();
+            if let Some(wv) = app.get_webview(&label) {
+              return Ok((GroupWebviewHandle::Desktop(wv), vid));
+            }
+          }
+          None
+        } else {
+          let Some(acc) = locked
+            .store
+            .accounts
+            .iter()
+            .find(|a| a.provider_id == key.provider_id && a.uuid == key.uuid)
+            .cloned()
+          else {
+            return Err("账号不存在或已被移除".to_string());
+          };
+          if acc.auth_state == AuthState::LoggedOut {
+            return Err("该账号当前处于未登录状态，请先前往登录".to_string());
+          }
+          Some(acc)
+        }
+      };
+
+      if let Some(acc) = account_to_start {
+        self
+          .prewarm_desktop_account_with_limit(app, acc, true)
+          .await?;
+      }
+
+      for _ in 0..200 {
+        {
+          let mut locked = self.inner.lock().await;
+          let Some(acc) = locked
+            .store
+            .accounts
+            .iter()
+            .find(|a| a.provider_id == key.provider_id && a.uuid == key.uuid)
+          else {
+            return Err("账号已被移除".to_string());
+          };
+          if acc.auth_state == AuthState::LoggedOut {
+            return Err("该账号未登录或会话已失效，请前往原生页面重新登录".to_string());
+          }
+          if let Some(entry) = locked.warm_pool.get_mut(key) {
+            if entry.paint_ready {
+              entry.last_used_ms = now_ms();
+              let vid = entry.view_instance_id;
+              let label = entry.webview_label.clone();
+              if let Some(wv) = app.get_webview(&label) {
+                return Ok((GroupWebviewHandle::Desktop(wv), vid));
+              }
+            }
           }
         }
-        None
-      } else {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+      }
+
+      Err("成员页面加载超时，请切换至该账号页确认状态".to_string())
+    }
+
+    #[cfg(target_os = "ios")]
+    {
+      let (acc, spec, requested_vid) = {
+        let locked = self.inner.lock().await;
         let Some(acc) = locked
           .store
           .accounts
@@ -10832,48 +11099,66 @@ impl SessionManager {
         if acc.auth_state == AuthState::LoggedOut {
           return Err("该账号当前处于未登录状态，请先前往登录".to_string());
         }
-        Some(acc)
-      }
-    };
+        let spec = resolve_provider(&key.provider_id)
+          .ok_or_else(|| "未找到对应的服务配置".to_string())?;
+        if !spec.info.enabled {
+          return Err("该服务尚未启用".to_string());
+        }
+        let existing_vid = locked
+          .ios_warm_views
+          .get(key)
+          .copied()
+          .or_else(|| {
+            locked
+              .active_slot
+              .as_ref()
+              .filter(|s| &s.account_key == key)
+              .map(|s| s.view_instance_id)
+          })
+          .unwrap_or_else(|| self.view_counter.fetch_add(1, Ordering::SeqCst));
+        (acc, spec, existing_vid)
+      };
 
-    if let Some(acc) = account_to_start {
-      self
-        .prewarm_desktop_account_with_limit(app, acc, true)
-        .await?;
-    }
+      let timezone_init_script = acc
+        .timezone
+        .as_deref()
+        .map(platform::build_timezone_override_init_js);
+      let payload = platform::mobile::EnsureIosGroupWebviewPayload {
+        provider_id: acc.provider_id.as_str().to_string(),
+        uuid: acc.uuid.clone(),
+        entry_url: spec.info.entry_url,
+        allowed_hosts: spec.allowed_hosts,
+        proxy_url: acc.proxy_url,
+        timezone: acc.timezone,
+        timezone_init_script,
+        auto_approve: self.auto_approve.load(Ordering::SeqCst),
+        background_raf_js: BACKGROUND_RAF_INIT_JS.to_string(),
+        net_hook_js: site_adapters::NET_HOOK_INIT_JS.to_string(),
+        view_instance_id: requested_vid,
+      };
 
-    for _ in 0..200 {
+      let resp = platform::mobile::ensure_group_webview(app, payload).await?;
       {
         let mut locked = self.inner.lock().await;
-        let Some(acc) = locked
-          .store
-          .accounts
-          .iter()
-          .find(|a| a.provider_id == key.provider_id && a.uuid == key.uuid)
-        else {
-          return Err("账号已被移除".to_string());
-        };
-        if acc.auth_state == AuthState::LoggedOut {
-          return Err("该账号未登录或会话已失效，请前往原生页面重新登录".to_string());
-        }
-        if let Some(entry) = locked.warm_pool.get_mut(key) {
-          if entry.paint_ready {
-            entry.last_used_ms = now_ms();
-            let vid = entry.view_instance_id;
-            let label = entry.webview_label.clone();
-            if let Some(wv) = app.get_webview(&label) {
-              return Ok((wv, vid));
-            }
-          }
-        }
+        locked.ios_warm_views.insert(key.clone(), resp.view_instance_id);
       }
-      tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+      if resp.logged_out {
+        self
+          .apply_logged_out_state(app, key.clone(), resp.view_instance_id)
+          .await;
+        return Err("该账号未登录或会话已失效，请前往原生页面重新登录".to_string());
+      }
+      Ok((
+        GroupWebviewHandle::Ios {
+          app: app.clone(),
+          key: key.clone(),
+        },
+        resp.view_instance_id,
+      ))
     }
-
-    Err("成员页面加载超时，请切换至该账号页确认状态".to_string())
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   fn normalize_url_for_thread(url: &Url) -> String {
     let scheme = url.scheme().to_ascii_lowercase();
     let host = url.host_str().unwrap_or("").to_ascii_lowercase();
@@ -10884,16 +11169,18 @@ impl SessionManager {
     }
   }
 
-  #[cfg(desktop)]
-  async fn wait_webview_settled(wv: &tauri::Webview, max_ticks: usize) {
+  #[cfg(any(desktop, target_os = "ios"))]
+  async fn wait_webview_settled(wv: &GroupWebviewHandle, max_ticks: usize) {
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     for _ in 0..max_ticks {
       #[cfg(target_os = "macos")]
-      let loading = platform::is_macos_webview_loading(wv).await;
+      let loading = match wv {
+        GroupWebviewHandle::Desktop(raw) => platform::is_macos_webview_loading(raw).await,
+      };
       #[cfg(not(target_os = "macos"))]
       let loading = false;
       if !loading {
-        if let Some(val) = Self::eval_json_callback(wv, "document.readyState === 'complete'").await {
+        if let Some(val) = wv.eval_json("document.readyState === 'complete'").await {
           if val.as_bool() == Some(true) {
             return;
           }
@@ -10903,14 +11190,14 @@ impl SessionManager {
     }
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   async fn prepare_group_member_thread(
     &self,
     group_id: &str,
     member_key: &AccountKey,
-    wv: &tauri::Webview,
+    wv: &GroupWebviewHandle,
   ) {
-    let Ok(cur_url) = wv.url() else {
+    let Some(cur_url) = wv.current_url().await else {
       return;
     };
     let (app_data_dir, spec_opt, bound_url) = {
@@ -10942,7 +11229,7 @@ impl SessionManager {
         ) && Self::normalize_url_for_thread(&target_url)
           != Self::normalize_url_for_thread(&cur_url)
         {
-          if wv.navigate(target_url).is_ok() {
+          if wv.navigate(target_url).await.is_ok() {
             Self::wait_webview_settled(wv, 24).await;
           }
         }
@@ -10961,7 +11248,8 @@ impl SessionManager {
 
     if !adapter.new_chat_selectors.is_empty() {
       let click_js = build_new_chat_click_js(&adapter);
-      if Self::eval_json_callback(wv, &click_js)
+      if wv
+        .eval_json(&click_js)
         .await
         .and_then(|v| v.get("clicked").and_then(|b| b.as_bool()))
         .unwrap_or(false)
@@ -10982,27 +11270,27 @@ impl SessionManager {
       ) && Self::normalize_url_for_thread(&new_url)
         != Self::normalize_url_for_thread(&cur_url)
       {
-        if wv.navigate(new_url).is_ok() {
+        if wv.navigate(new_url).await.is_ok() {
           Self::wait_webview_settled(wv, 20).await;
         }
       }
     }
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   async fn persist_group_thread_binding(
     &self,
     app: &AppHandle,
     group_id: &str,
     member_key: &AccountKey,
     _pre_send_norm: Option<&str>,
-    wv: &tauri::Webview,
+    wv: &GroupWebviewHandle,
     adapter: &SiteAdapterConfig,
   ) {
     if adapter.thread_url_patterns.is_empty() {
       return;
     }
-    let Ok(cur_url) = wv.url() else {
+    let Some(cur_url) = wv.current_url().await else {
       return;
     };
     let cur_str = cur_url.as_str().to_string();
@@ -11060,7 +11348,7 @@ impl SessionManager {
     }
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   async fn resolve_member_transport_locked(
     locked: &InnerState,
     key: &AccountKey,
@@ -11081,7 +11369,7 @@ impl SessionManager {
     Ok(ResolvedMemberTransport::WebView { key: key.clone() })
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   fn sanitize_history_assistant_text(raw: &str) -> Option<String> {
     let mut s = raw.trim();
     if s.is_empty() {
@@ -11145,9 +11433,8 @@ impl SessionManager {
     Some(s.chars().take(240).collect())
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   #[allow(clippy::too_many_arguments)]
-  #[cfg_attr(not(desktop), allow(dead_code))]
   fn sanitize_shared_context_for_prompt(raw: &str) -> String {
     let mut out_lines: Vec<String> = Vec::new();
     let mut idx = 0usize;
@@ -11180,7 +11467,7 @@ impl SessionManager {
     out_lines.join("\n").chars().take(3000).collect()
   }
 
-  #[cfg_attr(not(desktop), allow(dead_code))]
+  #[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
   fn clean_extracted_reply_text(raw: &str) -> String {
     const SPEAKERS: [&str; 6] = ["Gemini", "ChatGPT", "Claude", "DeepSeek", "Grok", "Kimi"];
     const VERBS: [&str; 3] = ["说", "said", "says"];
@@ -11281,7 +11568,7 @@ impl SessionManager {
     }
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   fn sanitize_shared_context_for_hark(raw: &str) -> String {
     let base = Self::sanitize_shared_context_for_prompt(raw);
     let mut out_lines: Vec<String> = Vec::new();
@@ -11311,7 +11598,7 @@ impl SessionManager {
     out_lines.join("\n").chars().take(3000).collect()
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   async fn build_turn_prompt_for_member(
     &self,
     group_id: &str,
@@ -11533,7 +11820,7 @@ impl SessionManager {
     Some((system_section, user_section, full_prompt, fingerprint))
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   #[allow(clippy::too_many_arguments)]
   async fn run_group_member_turn(
     self: &Arc<Self>,
@@ -11579,6 +11866,7 @@ impl SessionManager {
             .in_flight_group_members
             .entry(member_key.clone())
             .or_insert(0) += 1;
+          #[cfg(desktop)]
           Self::apply_desktop_layout_locked(app, &locked);
           Arc::clone(
             locked
@@ -11615,10 +11903,13 @@ impl SessionManager {
               locked.in_flight_group_members.remove(member_key);
             }
           }
-          if let Some(entry) = locked.warm_pool.get_mut(member_key) {
-            entry.last_used_ms = now_ms();
+          #[cfg(desktop)]
+          {
+            if let Some(entry) = locked.warm_pool.get_mut(member_key) {
+              entry.last_used_ms = now_ms();
+            }
+            Self::apply_desktop_layout_locked(app, &locked);
           }
-          Self::apply_desktop_layout_locked(app, &locked);
         }
         reply
       }
@@ -11641,7 +11932,7 @@ impl SessionManager {
     }
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   #[allow(clippy::too_many_arguments)]
   async fn execute_external_member_turn(
     self: &Arc<Self>,
@@ -11724,16 +12015,25 @@ impl SessionManager {
 
     let result = match agent.kind {
       ExternalAgentKind::OpenaiApi => {
+        #[cfg(not(desktop))]
+        let _ = &full_prompt;
         group_transport::execute_openai_api_turn(agent, &system_section, &user_section, |partial| {
           let _ = prog_tx.send(partial);
         })
         .await
       }
       ExternalAgentKind::LocalCli => {
-        group_transport::execute_local_cli_turn(agent, &full_prompt, |partial| {
-          let _ = prog_tx.send(partial);
-        })
-        .await
+        #[cfg(desktop)]
+        {
+          group_transport::execute_local_cli_turn(agent, &full_prompt, |partial| {
+            let _ = prog_tx.send(partial);
+          })
+          .await
+        }
+        #[cfg(not(desktop))]
+        {
+          Err("当前平台不支持运行本地 CLI 进程，请改用 OpenAI API 成员".to_string())
+        }
       }
     };
 
@@ -11772,8 +12072,8 @@ impl SessionManager {
     }
   }
 
-  #[cfg(desktop)]
-  async fn wake_and_settle_group_webview(wv: &tauri::Webview) {
+  #[cfg(any(desktop, target_os = "ios"))]
+  async fn wake_and_settle_group_webview(wv: &GroupWebviewHandle) {
     let wake_js = r#"(() => {
       try {
         window.dispatchEvent(new Event('focus'));
@@ -11786,7 +12086,7 @@ impl SessionManager {
         return JSON.stringify({ connecting: false });
       }
     })()"#;
-    let first = Self::eval_json_callback(wv, wake_js).await;
+    let first = wv.eval_json(wake_js).await;
     tokio::time::sleep(std::time::Duration::from_millis(380)).await;
     if first
       .and_then(|v| v.get("connecting").and_then(|b| b.as_bool()))
@@ -11794,7 +12094,8 @@ impl SessionManager {
     {
       for _ in 0..7 {
         tokio::time::sleep(std::time::Duration::from_millis(450)).await;
-        let still = Self::eval_json_callback(wv, wake_js)
+        let still = wv
+          .eval_json(wake_js)
           .await
           .and_then(|v| v.get("connecting").and_then(|b| b.as_bool()))
           .unwrap_or(false);
@@ -11805,27 +12106,49 @@ impl SessionManager {
     }
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   async fn discard_hung_group_webview(&self, app: &AppHandle, group_id: &str, key: &AccountKey) {
-    let mut locked = self.inner.lock().await;
-    locked
-      .group_context_synced
-      .remove(&(group_id.to_string(), key.clone()));
-    if locked.active_slot.as_ref().map(|s| &s.account_key) != Some(key) {
-      if let Some(entry) = locked.warm_pool.remove(key) {
-        Self::close_warm_entry(app, entry);
+    #[cfg(target_os = "ios")]
+    let should_discard_ios = {
+      let mut locked = self.inner.lock().await;
+      locked
+        .group_context_synced
+        .remove(&(group_id.to_string(), key.clone()));
+      if locked.active_slot.as_ref().map(|s| &s.account_key) != Some(key) {
+        locked.ios_warm_views.remove(key);
+        true
+      } else {
+        false
+      }
+    };
+    #[cfg(target_os = "ios")]
+    if should_discard_ios {
+      let _ = platform::mobile::discard_group_webview(app, key.provider_id.as_str(), &key.uuid).await;
+    }
+
+    #[cfg(desktop)]
+    {
+      let mut locked = self.inner.lock().await;
+      locked
+        .group_context_synced
+        .remove(&(group_id.to_string(), key.clone()));
+      if locked.active_slot.as_ref().map(|s| &s.account_key) != Some(key) {
+        if let Some(entry) = locked.warm_pool.remove(key) {
+          Self::close_warm_entry(app, entry);
+        }
       }
     }
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   async fn try_attach_file_in_webview(
-    wv: &tauri::Webview,
+    wv: &GroupWebviewHandle,
     adapter: &SiteAdapterConfig,
     attachment: &GroupAttachment,
   ) -> bool {
     let attach_js = build_group_attach_file_js(adapter, attachment);
-    let dispatched = Self::eval_json_callback(wv, &attach_js)
+    let dispatched = wv
+      .eval_json(&attach_js)
       .await
       .and_then(|v| v.get("dispatched").and_then(|b| b.as_bool()))
       .unwrap_or(false);
@@ -11835,7 +12158,8 @@ impl SessionManager {
     let check_js = build_group_check_attached_js(adapter, &attachment.filename);
     for _ in 0..6 {
       tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-      if Self::eval_json_callback(wv, &check_js)
+      if wv
+        .eval_json(&check_js)
         .await
         .and_then(|v| v.get("ready").and_then(|b| b.as_bool()))
         .unwrap_or(false)
@@ -11846,14 +12170,14 @@ impl SessionManager {
     false
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   async fn extract_hark_expanded_card_if_needed(
     &self,
-    wv: &tauri::Webview,
+    wv: &GroupWebviewHandle,
     preview_text: &str,
   ) -> String {
     let click_js = build_hark_click_preview_card_js(preview_text);
-    let Some(click_res) = Self::eval_json_callback(wv, &click_js).await else {
+    let Some(click_res) = wv.eval_json(&click_js).await else {
       return preview_text.to_string();
     };
     if !click_res
@@ -11882,7 +12206,7 @@ impl SessionManager {
     let mut best_expanded = String::new();
     let mut stable_hits = 0usize;
     for _ in 0..8 {
-      if let Some(res) = Self::eval_json_callback(wv, &read_js).await {
+      if let Some(res) = wv.eval_json(&read_js).await {
         let cur = res
           .get("text")
           .and_then(|v| v.as_str())
@@ -11903,7 +12227,7 @@ impl SessionManager {
       tokio::time::sleep(std::time::Duration::from_millis(350)).await;
     }
 
-    let _ = Self::eval_json_callback(wv, &build_hark_close_expanded_js()).await;
+    let _ = wv.eval_json(&build_hark_close_expanded_js()).await;
     tokio::time::sleep(std::time::Duration::from_millis(350)).await;
 
     if best_expanded.chars().count() <= card_preview.chars().count() + 24 {
@@ -11918,7 +12242,7 @@ impl SessionManager {
     }
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   #[allow(clippy::too_many_arguments)]
   async fn execute_webview_member_turn(
     self: &Arc<Self>,
@@ -11990,16 +12314,16 @@ impl SessionManager {
         return None;
       };
 
+      let cur_url_opt = wv.current_url().await;
       let (adapter, pre_send_norm) = {
         let locked = self.inner.lock().await;
         let app_data_dir = locked.app_data_dir.clone();
-        let url_opt = wv.url().ok();
-        let host = url_opt
+        let host = cur_url_opt
           .as_ref()
           .and_then(|u| u.host_str())
           .unwrap_or("")
           .to_string();
-        let pre = url_opt.as_ref().map(Self::normalize_url_for_thread);
+        let pre = cur_url_opt.as_ref().map(Self::normalize_url_for_thread);
         (
           site_adapters::resolve_adapter_for_host(&app_data_dir, &host),
           pre,
@@ -12037,15 +12361,15 @@ impl SessionManager {
       let mut send_eval_misses = 0usize;
       let mut recovered_dead_wv = false;
       for attempt in 0..24 {
-        let send_res = match Self::eval_json_callback(&wv, &send_js).await {
+        let send_res = match wv.eval_json(&send_js).await {
           Some(v) => {
             send_eval_misses = 0;
             v
           }
           None => {
             send_eval_misses += 1;
-            if !recovered_dead_wv && (app.get_webview(wv.label()).is_none() || send_eval_misses >= 4)
-            {
+            let alive = wv.is_alive(app).await;
+            if !recovered_dead_wv && (!alive || send_eval_misses >= 4) {
               recovered_dead_wv = true;
               send_eval_misses = 0;
               self
@@ -12075,7 +12399,7 @@ impl SessionManager {
                 continue;
               }
             }
-            if app.get_webview(wv.label()).is_none() || send_eval_misses >= 6 || attempt == 23 {
+            if !wv.is_alive(app).await || send_eval_misses >= 6 || attempt == 23 {
               self
                 .update_group_message_state(
                   app,
@@ -12167,14 +12491,14 @@ impl SessionManager {
       let mut trigger_reload_retry = false;
       for _ in 0..420 {
         tokio::time::sleep(std::time::Duration::from_millis(450)).await;
-        let res = match Self::eval_json_callback(&wv, &poll_js).await {
+        let res = match wv.eval_json(&poll_js).await {
           Some(v) => {
             poll_eval_misses = 0;
             v
           }
           None => {
             poll_eval_misses += 1;
-            if app.get_webview(wv.label()).is_some() && poll_eval_misses < 6 {
+            if wv.is_alive(app).await && poll_eval_misses < 6 {
               continue;
             }
             if retry_round == 0 && last_pushed_text.is_empty() {
@@ -12357,8 +12681,8 @@ impl SessionManager {
             false,
           )
           .await;
-        if app.get_webview(wv.label()).is_some() {
-          let _ = wv.eval("window.location.reload()");
+        if wv.is_alive(app).await {
+          wv.reload().await;
           Self::wait_webview_settled(&wv, 18).await;
           tokio::time::sleep(std::time::Duration::from_millis(900)).await;
         } else {
@@ -12425,7 +12749,7 @@ impl SessionManager {
     None
   }
 
-  #[cfg_attr(not(desktop), allow(dead_code))]
+  #[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
   fn select_a2a_relay_targets(
     reply_text: &str,
     speaker: &AccountKey,
@@ -12446,7 +12770,7 @@ impl SessionManager {
       .collect()
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   async fn run_group_review_pipeline(
     self: Arc<Self>,
     app: AppHandle,
@@ -12588,7 +12912,7 @@ impl SessionManager {
     }
   }
 
-  #[cfg(desktop)]
+  #[cfg(any(desktop, target_os = "ios"))]
   #[allow(clippy::too_many_arguments)]
   fn run_group_a2a_chain(
     self: Arc<Self>,

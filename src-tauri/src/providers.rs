@@ -42,7 +42,7 @@ impl ProviderId {
     self.0 == "cli"
   }
 
-  #[cfg_attr(not(desktop), allow(dead_code))]
+  #[cfg_attr(not(any(desktop, target_os = "ios")), allow(dead_code))]
   pub fn is_external(&self) -> bool {
     self.is_api() || self.is_cli()
   }

@@ -7,11 +7,11 @@ use tauri::Emitter;
 use url::Url;
 
 const LATEST_MANIFEST_URL: &str =
-  "https://github.com/ldjx7/multi-agent-account-manager/releases/latest/download/latest.json";
+  "https://github.com/csjoyxy/multi-agent-account-manager-ios/releases/latest/download/latest.json";
 const GITHUB_LATEST_API_URL: &str =
-  "https://api.github.com/repos/ldjx7/multi-agent-account-manager/releases/latest";
+  "https://api.github.com/repos/csjoyxy/multi-agent-account-manager-ios/releases/latest";
 const RELEASES_PAGE_URL: &str =
-  "https://github.com/ldjx7/multi-agent-account-manager/releases";
+  "https://github.com/csjoyxy/multi-agent-account-manager-ios/releases";
 
 static UPDATE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 

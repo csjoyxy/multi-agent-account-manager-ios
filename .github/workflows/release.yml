@@ -125,13 +125,31 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           umask 077
-          : "${ANDROID_KEYSTORE_BASE64:?Missing release keystore}"
           keystore="$RUNNER_TEMP/android-release.keystore"
           trap 'rm -f "$keystore"' EXIT
-          printf %s "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
-            --ks "$keystore" --ks-key-alias "$ANDROID_KEY_ALIAS" \
-            --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD \
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            printf %s "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+            ks_alias="$ANDROID_KEY_ALIAS"
+            ks_pass="$ANDROID_KEYSTORE_PASSWORD"
+            key_pass="$ANDROID_KEY_PASSWORD"
+          else
+            echo "::notice::ANDROID_KEYSTORE_BASE64 not configured; generating fallback PKCS12 keystore for fork build"
+            ks_alias="forkrelease"
+            ks_pass="androidrelease"
+            key_pass="androidrelease"
+            keytool -genkeypair -v \
+              -storetype PKCS12 \
+              -keystore "$keystore" \
+              -alias "$ks_alias" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$ks_pass" \
+              -keypass "$key_pass" \
+              -dname "CN=AccountManager, OU=Fork, O=OpenSource, L=Internet, S=Internet, C=US"
+          fi
+          ANDROID_KS_PASS="$ks_pass" ANDROID_KEY_PASS="$key_pass" \
+            "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
+            --ks "$keystore" --ks-key-alias "$ks_alias" \
+            --ks-pass env:ANDROID_KS_PASS --key-pass env:ANDROID_KEY_PASS \
             --out "$RUNNER_TEMP/account-manager-release.apk" \
             src-tauri/gen/android/app/build/outputs/apk/universal/release/*-unsigned.apk
       - name: Verify APK signature
@@ -148,7 +166,7 @@ jobs:
     timeout-minutes: 60
     env:
       HOMEBREW_NO_AUTO_UPDATE: 1
-      IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+      IPHONEOS_DEPLOYMENT_TARGET: "16.0"
     steps:
       - uses: actions/checkout@v7
         with:
