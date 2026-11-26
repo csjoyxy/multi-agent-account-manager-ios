@@ -1,6 +1,12 @@
 # 叠号（Multi-Agent Account Manager）
 
 [![LINUX DO](https://img.shields.io/badge/Community-LINUX%20DO-0064e0?style=flat-square)](https://linux.do/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
+[![Upstream](https://img.shields.io/badge/Upstream-ldjx7%2Fmulti--agent--account--manager-181717?style=flat-square&logo=github)](https://github.com/ldjx7/multi-agent-account-manager)
+
+> **开源来源与致谢声明（Attribution）**
+> 本仓库基于原作者 **[@ldjx7](https://github.com/ldjx7)** 开源的 **[ldjx7/multi-agent-account-manager](https://github.com/ldjx7/multi-agent-account-manager)**（遵循 [Apache-2.0](LICENSE) 协议）衍生修改，完整保留上游提交历史与版权声明（详见 [NOTICE](NOTICE)）。
+> 本衍生版重点新增了 **iOS 16.0+（含 iOS 16.4.1）多账号隔离持久化** 与 **iOS 端多账号群聊协作** 支持；iOS 16 兼容与衍生构建相关问题请在本仓库反馈，请勿打扰上游原作者。
 
 基于 Tauri 2 构建的跨平台（macOS / Windows / iOS / Android）AI 助手多账号隔离与快速切换工具，安装后应用名称为 **叠号**。
 

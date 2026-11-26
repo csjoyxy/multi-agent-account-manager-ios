@@ -1,0 +1,14 @@
+叠号（Multi-Agent Account Manager）— iOS 16.0+ & iOS 群聊衍生版
+Copyright 2026 ldjx7 (Original Work)
+Modifications Copyright 2026 csjoyxy
+
+本仓库基于 Apache License 2.0 协议衍生自上游开源项目：
+- 原项目仓库：https://github.com/ldjx7/multi-agent-account-manager
+- 原作者：ldjx7 (https://github.com/ldjx7)
+- 开源协议：Apache License, Version 2.0 (见根目录 LICENSE 文件)
+
+主要衍生修改说明（Apache-2.0 Section 4(b) Notice of Modifications）：
+1. 新增 iOS 16.0–16.7（含 iOS 16.4.1）多账号隔离数据容器与沙盒持久化机制（IosProfileStoreManager.swift），将最低系统要求由 iOS 17.0 下调至 iOS 16.0。
+2. 新增 iOS 后台保活 WKWebView 会话池（IosGroupWebViewPool.swift），在 iOS 端移植并打通多账号群聊协作（并行 / 评审流 / A2A 接力、共享上下文与技能、直连 OpenAI 兼容 API、工具权限自动审批、前台与群聊实时 DOM 复用）。
+3. 适配 iPhone 单栏切换与 iPad 双栏分屏的移动端群聊交互界面（src/main.ts、src/styles.css）。
+4. 新增独立 iOS IPA 构建与发布流水线（.github/workflows/ios.yml），更新应用内检查更新地址与衍生版构建脚本。

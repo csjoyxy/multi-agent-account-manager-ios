@@ -1,3 +1,4 @@
+// Modified by csjoyxy in 2026 from https://github.com/ldjx7/multi-agent-account-manager (Apache-2.0) for iOS 16.0+ & iOS Group Chat support.
 import Foundation
 import Tauri
 import UIKit
