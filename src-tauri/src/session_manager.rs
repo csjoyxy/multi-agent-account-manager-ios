@@ -1271,7 +1271,7 @@ const IDENTITY_PROBE_JS: &str = r#"(() => {
     if (document.readyState === 'loading') {
       return makeLoading();
     }
-    const loginInputs = document.querySelectorAll('input[type="email"], input[type="password"], input[autocomplete="one-time-code"], input[placeholder*="邮箱"], input[placeholder*="手机"], input[placeholder*="email" i], input[placeholder*="phone" i]');
+    const loginInputs = document.querySelectorAll('input[type="email"], input[type="password"], input[type="tel"], input[autocomplete="one-time-code"], input[autocomplete*="email" i], input[inputmode="email"], input[inputmode="numeric"], input[name*="email" i], input[name*="phone" i], input[name*="code" i], input[name*="otp" i], input[id*="email" i], input[id*="code" i], input[id*="otp" i], input[maxlength="1"], input[maxlength="6"], input[placeholder*="邮箱"], input[placeholder*="手机"], input[placeholder*="验证码"], input[placeholder*="email" i], input[placeholder*="phone" i], input[placeholder*="code" i], input[aria-label*="邮箱"], input[aria-label*="验证码"], input[aria-label*="email" i], input[aria-label*="code" i]');
     const hasVisibleLoginInput = () => {
       for (const inp of loginInputs) {
         if (inp.disabled || inp.readOnly) continue;
@@ -1280,6 +1280,8 @@ const IDENTITY_PROBE_JS: &str = r#"(() => {
       }
       return false;
     };
+    const activeEl = document.activeElement;
+    const hasFocusedInput = Boolean(activeEl && activeEl.tagName === 'INPUT' && !activeEl.disabled && !activeEl.readOnly);
     const hasChatComposer = Array.from(document.querySelectorAll('textarea, [contenteditable="true"]')).some((el) => {
       if (el.disabled || el.readOnly) return false;
       const r = el.getBoundingClientRect();
@@ -1332,11 +1334,11 @@ const IDENTITY_PROBE_JS: &str = r#"(() => {
     if (/^\/(login|signin|signup|auth)\b/.test(path)) {
       return makeLoggedOut(false);
     }
-    if (!hasChatComposer && !/^\/(settings|profile|account)\b/.test(path) && hasVisibleLoginInput()) {
+    if (!hasChatComposer && !/^\/(settings|profile|account)\b/.test(path) && (hasVisibleLoginInput() || hasFocusedInput)) {
       return makeLoggedOut(false);
     }
     const bodyText = (document.body && document.body.innerText) || '';
-    if (!hasChatComposer && /登录或创建账户|Log in or sign up|Sign in to|登录以继续|通过 Google 继续|Continue with Google|通过 Apple 继续|Continue with Apple/i.test(bodyText)) {
+    if (!hasChatComposer && /登录或创建账户|登录\s*Muse|Log in to Muse|使用其他账户|Use another account|Log in or sign up|Sign in to|登录以继续|通过 Google 继续|Continue with Google|通过 Apple 继续|Continue with Apple|Continue with email|使用邮箱继续|输入验证码|验证码|verification code|enter the code|enter code|check your email|检查你的邮箱|手机号或邮箱/i.test(bodyText)) {
       return makeLoggedOut(false);
     }
     if (host.endsWith('hark.com') && bodyText.trim() === 'Unauthorized') {
@@ -1358,7 +1360,7 @@ const IDENTITY_PROBE_JS: &str = r#"(() => {
     if (!hasChatComposer) {
       const ac = window.__maamAuthCheck;
       if (ac && ac.status === 'invalid') {
-        return makeLoggedOut(true);
+        return makeLoggedOut(!(hasVisibleLoginInput() || hasFocusedInput || Boolean(typed || phone)));
       }
       const hasErrorActionBtn = Array.from(document.querySelectorAll('button, a, [role="button"]')).some((el) => {
         if (!el || !el.isConnected) return false;
@@ -1392,7 +1394,7 @@ const IDENTITY_PROBE_JS: &str = r#"(() => {
         }
         return makePageError(isDegradedMuseSettings ? '登录态异常，请退出或清理重登' : '页面出错，请检查代理或清理重登');
       }
-      if (!/^\/(settings|profile|account)\b/.test(path) && (!ac || ac.status === 'unknown') && (!ac || ac.inflight || !ac.checkedAt)) {
+      if (!/^\/(settings|profile|account)\b/.test(path) && (!ac || ac.status !== 'ok')) {
         return makeLoading();
       }
     }
@@ -6155,6 +6157,7 @@ impl SessionManager {
   async fn build_sync_bundle_payload(
     &self,
     app: &AppHandle,
+    include_proxy: bool,
   ) -> Result<(crate::sync_bundle::SyncBundlePayload, usize), String> {
     let (accounts, group_chats, external_agents) = {
       let locked = self.inner.lock().await;
@@ -6172,7 +6175,13 @@ impl SessionManager {
             .iter()
             .any(|p| p.provider_id == a.provider_id && p.uuid == a.uuid)
         })
-        .cloned()
+        .map(|a| {
+          let mut cloned = a.clone();
+          if !include_proxy {
+            cloned.proxy_url = None;
+          }
+          cloned
+        })
         .collect::<Vec<_>>();
       (
         accounts,
@@ -6284,6 +6293,7 @@ impl SessionManager {
     self: &Arc<Self>,
     app: &AppHandle,
     payload: crate::sync_bundle::SyncBundlePayload,
+    include_proxy: bool,
   ) -> Result<ImportSyncBundleResponse, String> {
     let mut added_accounts = 0usize;
     let mut updated_accounts = 0usize;
@@ -6316,7 +6326,7 @@ impl SessionManager {
         }) {
           continue;
         }
-        let proxy_valid = if platform::SUPPORTS_ACCOUNT_PROXY {
+        let proxy_valid = if include_proxy && platform::SUPPORTS_ACCOUNT_PROXY {
           incoming
             .proxy_url
             .as_deref()
@@ -6342,7 +6352,7 @@ impl SessionManager {
           {
             existing.created_at_ms = incoming.created_at_ms;
           }
-          if platform::SUPPORTS_ACCOUNT_PROXY && proxy_valid.is_some() {
+          if include_proxy && platform::SUPPORTS_ACCOUNT_PROXY && proxy_valid.is_some() {
             existing.proxy_url = proxy_valid;
           }
           if tz_valid.is_some() {
@@ -6354,7 +6364,11 @@ impl SessionManager {
           updated_accounts += 1;
         } else {
           let mut rec = incoming;
-          rec.proxy_url = proxy_valid;
+          rec.proxy_url = if include_proxy && platform::SUPPORTS_ACCOUNT_PROXY {
+            proxy_valid
+          } else {
+            None
+          };
           rec.timezone = tz_valid;
           rec.auth_state = AuthState::Unknown;
           rec.cookie_expires_at_ms = None;
@@ -6539,8 +6553,9 @@ impl SessionManager {
     &self,
     app: &AppHandle,
     passphrase: String,
+    include_proxy: bool,
   ) -> Result<crate::sync_bundle::ExportSyncBundleResponse, String> {
-    let (payload, cookie_account_count) = self.build_sync_bundle_payload(app).await?;
+    let (payload, cookie_account_count) = self.build_sync_bundle_payload(app, include_proxy).await?;
     let account_count = payload.accounts.len();
     let bundle_json = crate::sync_bundle::encrypt_sync_bundle(&payload, &passphrase)?;
     let filename = format!("account-manager-sync-{}.maam", now_ms() / 1000);
@@ -6587,15 +6602,17 @@ impl SessionManager {
     app: &AppHandle,
     bundle_json: String,
     passphrase: String,
+    include_proxy: bool,
   ) -> Result<ImportSyncBundleResponse, String> {
     let payload = crate::sync_bundle::decrypt_sync_bundle(&bundle_json, &passphrase)?;
-    self.apply_sync_bundle(app, payload).await
+    self.apply_sync_bundle(app, payload, include_proxy).await
   }
 
   pub async fn start_lan_sync_share(
     &self,
     app: &AppHandle,
     passphrase: Option<String>,
+    include_proxy: bool,
   ) -> Result<crate::sync_bundle::LanSyncShareInfo, String> {
     let _ = self.stop_lan_sync_share(app).await;
 
@@ -6604,7 +6621,7 @@ impl SessionManager {
       None => crate::sync_bundle::generate_lan_pin(),
     };
 
-    let (payload, cookie_account_count) = self.build_sync_bundle_payload(app).await?;
+    let (payload, cookie_account_count) = self.build_sync_bundle_payload(app, include_proxy).await?;
     let account_count = payload.accounts.len();
     let encrypted = crate::sync_bundle::encrypt_sync_bundle(&payload, &pass)?;
     let started = crate::sync_bundle::spawn_lan_sync_server(encrypted, pass.clone(), 3, 180).await?;
@@ -6635,12 +6652,13 @@ impl SessionManager {
     &self,
     app: &AppHandle,
     relay_url: Option<String>,
+    include_proxy: bool,
   ) -> Result<crate::sync_bundle::LanSyncShareInfo, String> {
     let _ = self.stop_lan_sync_share(app).await;
 
     let base_url =
       crate::sync_bundle::normalize_relay_base_url(relay_url.as_deref().unwrap_or(""))?;
-    let (payload, cookie_account_count) = self.build_sync_bundle_payload(app).await?;
+    let (payload, cookie_account_count) = self.build_sync_bundle_payload(app, include_proxy).await?;
     let account_count = payload.accounts.len();
     let prepared = crate::sync_bundle::prepare_relay_drop(&payload, &base_url, 3, 180)?;
     crate::sync_bundle::upload_relay_drop(app, &base_url, prepared.upload_json).await?;
@@ -6692,17 +6710,18 @@ impl SessionManager {
     app: &AppHandle,
     address: String,
     passphrase: String,
+    include_proxy: bool,
   ) -> Result<ImportSyncBundleResponse, String> {
     if crate::sync_bundle::is_relay_sync_uri(&address) {
       let target = crate::sync_bundle::parse_relay_target(&address, &passphrase)?;
       let resp = crate::sync_bundle::fetch_relay_drop(app, &target).await?;
       let payload = crate::sync_bundle::decrypt_relay_drop(&resp, &target.key)?;
-      return self.apply_sync_bundle(app, payload).await;
+      return self.apply_sync_bundle(app, payload, include_proxy).await;
     }
     let (ip, port, pass) = crate::sync_bundle::parse_lan_target(&address, &passphrase)?;
     let encrypted = crate::sync_bundle::fetch_lan_sync_bundle(ip, port, &pass).await?;
     let payload = crate::sync_bundle::decrypt_sync_bundle(&encrypted, &pass)?;
-    self.apply_sync_bundle(app, payload).await
+    self.apply_sync_bundle(app, payload, include_proxy).await
   }
 
   pub async fn scan_sync_qr_code(&self, app: &AppHandle) -> Result<ScanQrResult, String> {
@@ -6783,10 +6802,11 @@ impl SessionManager {
     password: String,
     filename: Option<String>,
     passphrase: String,
+    include_proxy: bool,
   ) -> Result<crate::sync_bundle::WebDavPushResult, String> {
     let _ = crate::sync_bundle::normalize_webdav_target(&url, filename.as_deref())?;
     let _ = crate::sync_bundle::validate_sync_passphrase(&passphrase)?;
-    let (payload, cookie_account_count) = self.build_sync_bundle_payload(app).await?;
+    let (payload, cookie_account_count) = self.build_sync_bundle_payload(app, include_proxy).await?;
     let account_count = payload.accounts.len();
     let encrypted = crate::sync_bundle::encrypt_sync_bundle(&payload, &passphrase)?;
     let size_bytes = encrypted.len();
@@ -6818,6 +6838,7 @@ impl SessionManager {
     password: String,
     filename: Option<String>,
     passphrase: String,
+    include_proxy: bool,
   ) -> Result<ImportSyncBundleResponse, String> {
     let _ = crate::sync_bundle::normalize_webdav_target(&url, filename.as_deref())?;
     let _ = crate::sync_bundle::validate_sync_passphrase(&passphrase)?;
@@ -6833,7 +6854,7 @@ impl SessionManager {
     let _ = self
       .persist_webdav_config(app, &url, &username, &password, filename.as_deref())
       .await;
-    self.apply_sync_bundle(app, payload).await
+    self.apply_sync_bundle(app, payload, include_proxy).await
   }
 
   pub async fn set_modal_active(
@@ -7056,8 +7077,16 @@ impl SessionManager {
                   .refresh_account_cookie_expiry(&app_handle, key, force || just_authenticated)
                   .await;
               } else if probe.logged_out {
+                let was_auth = {
+                  let locked = mgr.inner.lock().await;
+                  locked.store.accounts.iter().any(|a| {
+                    a.provider_id == key.provider_id
+                      && a.uuid == key.uuid
+                      && a.auth_state == AuthState::Authenticated
+                  })
+                };
                 mgr.apply_logged_out_state(&app_handle, key.clone(), vid).await;
-                if probe.stale_session {
+                if probe.stale_session && was_auth && probe.typed.is_empty() {
                   if key.provider_id.is_muse() {
                     if let Ok(u) = Url::parse("https://muse.ai/api/logout") {
                       let _ = wv.navigate(u);
@@ -9269,6 +9298,7 @@ impl SessionManager {
       let mut consecutive_logged_out: u8 = 0;
       let mut consecutive_page_error: u8 = 0;
       let mut stale_session_reset_done = false;
+      let mut has_confirmed_auth = false;
       let mut meta_center_probed = false;
       let mut next_delay_ms: Option<u64> = None;
       loop {
@@ -9364,7 +9394,7 @@ impl SessionManager {
           if let Some(entry) = locked.warm_pool.get_mut(&key) {
             if entry.view_instance_id == view_instance_id {
               if !probe.typed.is_empty() {
-                entry.captured_identity_hint = Some(probe.typed);
+                entry.captured_identity_hint = Some(probe.typed.clone());
               }
               if probe.is_auth {
                 let strong = if !probe.email.is_empty() {
@@ -9398,6 +9428,7 @@ impl SessionManager {
         };
 
         if probe.is_auth {
+          has_confirmed_auth = true;
           consecutive_auth_ticks = consecutive_auth_ticks.saturating_add(1);
           consecutive_logged_out = 0;
           consecutive_page_error = 0;
@@ -9463,7 +9494,11 @@ impl SessionManager {
             mgr
               .apply_logged_out_state(&app, key.clone(), view_instance_id)
               .await;
-            if probe.stale_session && !stale_session_reset_done {
+            if probe.stale_session
+              && !stale_session_reset_done
+              && has_confirmed_auth
+              && probe.typed.is_empty()
+            {
               stale_session_reset_done = true;
               if key.provider_id.is_muse() {
                 if let Ok(u) = Url::parse("https://muse.ai/api/logout") {
@@ -9475,6 +9510,7 @@ impl SessionManager {
                 }
               }
             }
+            has_confirmed_auth = false;
             next_delay_ms = Some(if tick_count < 6 { 950 } else { 6500 });
           } else {
             next_delay_ms = Some(300);

@@ -113,6 +113,7 @@ type ModalMode =
   | {
       kind: "sync";
       tab: "lan" | "webdav" | "file";
+      includeProxy: boolean;
       relayEnabled: boolean;
       relayUrlDraft: string;
       lanSharePassDraft: string;
@@ -1451,7 +1452,7 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
           </div>
           <div class="sync-section">
             <div class="sync-section-title">端到端加密上传与增量拉取</div>
-            <div class="sync-privacy-note">所有账号、代理、时区、群聊与 Cookie 均在本地使用 AES-256-GCM 加密后上传，WebDAV 网盘仅保存密文（加密口令不会保存或上传）；拉取采用增量合并，不删除本机已有账号。</div>
+            <div class="sync-privacy-note">所有账号、时区、群聊与 Cookie（代理配置按上方开关决定）均在本地使用 AES-256-GCM 加密后上传，WebDAV 网盘仅保存密文（加密口令不会保存或上传）；拉取采用增量合并，不删除本机已有账号。</div>
             <input id="sync-webdav-sync-pass" class="modal-input" type="password" maxlength="128" placeholder="设置/输入端到端加密口令（至少 4 位，两端需一致）" value="${escapeHtml(modal.webdavSyncPassDraft)}" autocomplete="off" ${busyAny ? "disabled" : ""} />
             <div class="sync-ops-row">
               <button id="sync-webdav-push-btn" class="btn primary" type="button" ${busyAny ? "disabled" : ""}>${modal.webdavPushBusy ? "加密上传中..." : "加密上传到 WebDAV"}</button>
@@ -1462,7 +1463,7 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
           : `
           <div class="sync-section">
             <div class="sync-section-title">导出加密备份（.maam）</div>
-            <div class="modal-hint">AES-256-GCM 端到端加密包含所有账号、代理、时区、群聊与 Cookie 登录态。</div>
+            <div class="modal-hint">AES-256-GCM 端到端加密包含所有账号、时区、群聊与 Cookie 登录态（代理配置按上方开关决定）。</div>
             <div class="sync-inline-row">
               <input id="sync-file-export-pass" class="modal-input" type="password" maxlength="128" placeholder="设置加密口令（至少 4 位）" value="${escapeHtml(modal.fileExportPassDraft)}" autocomplete="off" ${busyAny ? "disabled" : ""} />
               <button id="sync-file-export-btn" class="btn primary" type="button" ${busyAny ? "disabled" : ""}>${modal.fileExportBusy ? "导出中..." : "导出备份"}</button>
@@ -1500,6 +1501,10 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
             <button id="sync-tab-webdav" class="sync-tab-btn ${modal.tab === "webdav" ? "active" : ""}" type="button" ${busyAny ? "disabled" : ""}>WebDAV 云同步</button>
             <button id="sync-tab-file" class="sync-tab-btn ${modal.tab === "file" ? "active" : ""}" type="button" ${busyAny ? "disabled" : ""}>加密备份文件</button>
           </div>
+          <label class="sync-relay-toggle">
+            <input id="sync-include-proxy-toggle" type="checkbox" ${modal.includeProxy ? "checked" : ""} ${busyAny ? "disabled" : ""} />
+            <span>同步 / 导出时包含账号代理配置（默认关闭，跨设备建议关闭）</span>
+          </label>
           ${tabBody}
           ${
             summary
@@ -4006,6 +4011,7 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
     await setModal({
       kind: "sync",
       tab: "lan",
+      includeProxy: false,
       relayEnabled: false,
       relayUrlDraft: savedRelay || snapshot?.officialRelayUrl || "",
       lanSharePassDraft: "",
@@ -4024,6 +4030,13 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
       fileImportPassDraft: "",
       importSummary: null,
     });
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-include-proxy-toggle")?.addEventListener("change", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.includeProxy = Boolean((ev.currentTarget as HTMLInputElement).checked);
+    modal.error = undefined;
+    modal.copyHint = undefined;
   });
 
   document.querySelector<HTMLInputElement>("#sync-relay-toggle")?.addEventListener("change", (ev) => {
@@ -4150,6 +4163,7 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
         password: cur.webdavPassDraft,
         filename: cur.webdavFilenameDraft.trim() || null,
         passphrase: cur.webdavSyncPassDraft,
+        includeProxy: cur.includeProxy,
       });
       if (modal === cur) {
         const kb = Math.max(1, Math.round(res.sizeBytes / 1024));
@@ -4180,6 +4194,7 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
         password: cur.webdavPassDraft,
         filename: cur.webdavFilenameDraft.trim() || null,
         passphrase: cur.webdavSyncPassDraft,
+        includeProxy: cur.includeProxy,
       });
       snapshot = res.snapshot;
       syncViewModeFromSnapshot(snapshot);
@@ -4279,9 +4294,11 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
       const info = cur.relayEnabled
         ? await invoke<LanSyncShareInfo>("start_relay_sync_share", {
             relayUrl: cur.relayUrlDraft.trim() || null,
+            includeProxy: cur.includeProxy,
           })
         : await invoke<LanSyncShareInfo>("start_lan_sync_share", {
             passphrase: cur.lanSharePassDraft.trim() || null,
+            includeProxy: cur.includeProxy,
           });
       if (modal === cur) {
         cur.lanShareInfo = info;
@@ -4362,6 +4379,7 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
       const res = await invoke<ImportSyncBundleResponse>("pull_lan_sync_share", {
         address: parsedAddr,
         passphrase: parsedPass,
+        includeProxy: cur.includeProxy,
       });
       snapshot = res.snapshot;
       syncViewModeFromSnapshot(snapshot);
@@ -4390,6 +4408,7 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
       const res = await invoke<ImportSyncBundleResponse>("pull_lan_sync_share", {
         address: cur.lanPullAddrDraft.trim(),
         passphrase: cur.lanPullPassDraft.trim(),
+        includeProxy: cur.includeProxy,
       });
       snapshot = res.snapshot;
       syncViewModeFromSnapshot(snapshot);
@@ -4416,6 +4435,7 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
     try {
       const res = await invoke<ExportSyncBundleResponse>("export_sync_bundle", {
         passphrase: cur.fileExportPassDraft,
+        includeProxy: cur.includeProxy,
       });
       if (modal === cur) {
         cur.fileExportResult = res;
@@ -4474,6 +4494,7 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
       const res = await invoke<ImportSyncBundleResponse>("import_sync_bundle", {
         bundleJson: cur.fileImportJsonDraft,
         passphrase: cur.fileImportPassDraft,
+        includeProxy: cur.includeProxy,
       });
       snapshot = res.snapshot;
       syncViewModeFromSnapshot(snapshot);
