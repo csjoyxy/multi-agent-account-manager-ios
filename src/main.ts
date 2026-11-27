@@ -114,6 +114,8 @@ type ModalMode =
       kind: "sync";
       tab: "lan" | "webdav" | "file";
       includeProxy: boolean;
+      selectedAccountKeys: string[];
+      accountPickerExpanded: boolean;
       relayEnabled: boolean;
       relayUrlDraft: string;
       lanSharePassDraft: string;
@@ -1370,6 +1372,50 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
     const isRelayActive = shareInfo?.mode === "relay";
     const exportRes = modal.fileExportResult;
     const summary = modal.importSummary;
+    const selectedKeySet = new Set(modal.selectedAccountKeys.map((k) => k.toLowerCase()));
+    const totalSyncAccounts = state.accounts.length;
+    const selectedSyncAccounts = state.accounts.filter((a) =>
+      selectedKeySet.has(`${a.providerId}:${a.uuid}`.toLowerCase())
+    ).length;
+    const syncAccountPickerHtml =
+      totalSyncAccounts > 0
+        ? `
+          <div class="sync-account-picker">
+            <div class="sync-account-picker-head">
+              <span id="sync-account-picker-count">同步 / 导出账号：${selectedSyncAccounts === totalSyncAccounts ? `全部 ${totalSyncAccounts} 个` : `已选 ${selectedSyncAccounts} / ${totalSyncAccounts} 个`}</span>
+              <button id="sync-account-picker-toggle" class="mini-btn" type="button" ${busyAny ? "disabled" : ""}>${modal.accountPickerExpanded ? "收起" : "选择账号"}</button>
+            </div>
+            ${
+              modal.accountPickerExpanded
+                ? `
+              <div class="sync-account-picker-actions">
+                <button id="sync-account-select-all" class="mini-btn" type="button" ${busyAny ? "disabled" : ""}>全选</button>
+                <button id="sync-account-select-none" class="mini-btn" type="button" ${busyAny ? "disabled" : ""}>清空</button>
+              </div>
+              <div class="sync-account-picker-list">
+                ${state.accounts
+                  .map((acc) => {
+                    const key = `${acc.providerId}:${acc.uuid}`;
+                    const checked = selectedKeySet.has(key.toLowerCase());
+                    const providerLabel = acc.providerId === "muse" ? "Muse" : acc.providerId === "hark" ? "Hark" : acc.providerId;
+                    const authLabel = acc.authState === "authenticated" ? "已登录" : "未登录";
+                    return `
+                      <label class="sync-account-pick-item">
+                        <input class="sync-account-pick-cb" type="checkbox" data-account-key="${escapeHtml(key)}" ${checked ? "checked" : ""} ${busyAny ? "disabled" : ""} />
+                        <span class="sync-account-pick-tag">${escapeHtml(providerLabel)}</span>
+                        <span class="sync-account-pick-name">${escapeHtml(acc.alias)}</span>
+                        <span class="sync-account-pick-auth ${acc.authState === "authenticated" ? "ok" : ""}">${authLabel}</span>
+                      </label>
+                    `;
+                  })
+                  .join("")}
+              </div>
+            `
+                : ""
+            }
+          </div>
+        `
+        : "";
     const tabBody =
       modal.tab === "lan"
         ? `
@@ -1505,6 +1551,7 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
             <input id="sync-include-proxy-toggle" type="checkbox" ${modal.includeProxy ? "checked" : ""} ${busyAny ? "disabled" : ""} />
             <span>同步 / 导出时包含账号代理配置（默认关闭，跨设备建议关闭）</span>
           </label>
+          ${syncAccountPickerHtml}
           ${tabBody}
           ${
             summary
@@ -4012,6 +4059,8 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
       kind: "sync",
       tab: "lan",
       includeProxy: false,
+      selectedAccountKeys: state.accounts.map((a) => `${a.providerId}:${a.uuid}`),
+      accountPickerExpanded: false,
       relayEnabled: false,
       relayUrlDraft: savedRelay || snapshot?.officialRelayUrl || "",
       lanSharePassDraft: "",
@@ -4029,6 +4078,52 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
       fileImportJsonDraft: "",
       fileImportPassDraft: "",
       importSummary: null,
+    });
+  });
+
+  document.querySelector("#sync-account-picker-toggle")?.addEventListener("click", () => {
+    if (modal.kind !== "sync") return;
+    modal.accountPickerExpanded = !modal.accountPickerExpanded;
+    render();
+  });
+
+  document.querySelector("#sync-account-select-all")?.addEventListener("click", () => {
+    if (modal.kind !== "sync") return;
+    modal.selectedAccountKeys = state.accounts.map((a) => `${a.providerId}:${a.uuid}`);
+    modal.error = undefined;
+    render();
+  });
+
+  document.querySelector("#sync-account-select-none")?.addEventListener("click", () => {
+    if (modal.kind !== "sync") return;
+    modal.selectedAccountKeys = [];
+    modal.error = undefined;
+    render();
+  });
+
+  document.querySelectorAll<HTMLInputElement>(".sync-account-pick-cb").forEach((cb) => {
+    cb.addEventListener("change", (ev) => {
+      if (modal.kind !== "sync") return;
+      const el = ev.currentTarget as HTMLInputElement;
+      const key = (el.dataset.accountKey || "").trim();
+      if (!key) return;
+      const lower = key.toLowerCase();
+      const next = modal.selectedAccountKeys.filter((k) => k.toLowerCase() !== lower);
+      if (el.checked) {
+        next.push(key);
+      }
+      modal.selectedAccountKeys = next;
+      modal.error = undefined;
+      const countEl = document.querySelector("#sync-account-picker-count");
+      if (countEl) {
+        const set = new Set(next.map((k) => k.toLowerCase()));
+        const total = state.accounts.length;
+        const selected = state.accounts.filter((a) =>
+          set.has(`${a.providerId}:${a.uuid}`.toLowerCase())
+        ).length;
+        countEl.textContent =
+          selected === total ? `同步 / 导出账号：全部 ${total} 个` : `同步 / 导出账号：已选 ${selected} / ${total} 个`;
+      }
     });
   });
 
@@ -4151,6 +4246,11 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
   document.querySelector("#sync-webdav-push-btn")?.addEventListener("click", async () => {
     const cur = modal;
     if (cur.kind !== "sync" || cur.webdavPushBusy || cur.webdavPullBusy) return;
+    if ((snapshot?.accounts.length ?? 0) > 0 && cur.selectedAccountKeys.length === 0) {
+      cur.error = "请至少选择一个要同步的账号";
+      render();
+      return;
+    }
     cur.webdavPushBusy = true;
     cur.error = undefined;
     cur.webdavHint = undefined;
@@ -4164,6 +4264,7 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
         filename: cur.webdavFilenameDraft.trim() || null,
         passphrase: cur.webdavSyncPassDraft,
         includeProxy: cur.includeProxy,
+        accountKeys: cur.selectedAccountKeys,
       });
       if (modal === cur) {
         const kb = Math.max(1, Math.round(res.sizeBytes / 1024));
@@ -4286,6 +4387,11 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
   document.querySelector("#sync-lan-start-btn")?.addEventListener("click", async () => {
     const cur = modal;
     if (cur.kind !== "sync" || cur.lanShareBusy) return;
+    if ((snapshot?.accounts.length ?? 0) > 0 && cur.selectedAccountKeys.length === 0) {
+      cur.error = "请至少选择一个要同步的账号";
+      render();
+      return;
+    }
     cur.lanShareBusy = true;
     cur.error = undefined;
     cur.copyHint = undefined;
@@ -4295,10 +4401,12 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
         ? await invoke<LanSyncShareInfo>("start_relay_sync_share", {
             relayUrl: cur.relayUrlDraft.trim() || null,
             includeProxy: cur.includeProxy,
+            accountKeys: cur.selectedAccountKeys,
           })
         : await invoke<LanSyncShareInfo>("start_lan_sync_share", {
             passphrase: cur.lanSharePassDraft.trim() || null,
             includeProxy: cur.includeProxy,
+            accountKeys: cur.selectedAccountKeys,
           });
       if (modal === cur) {
         cur.lanShareInfo = info;
@@ -4428,6 +4536,11 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
   document.querySelector("#sync-file-export-btn")?.addEventListener("click", async () => {
     const cur = modal;
     if (cur.kind !== "sync" || cur.fileExportBusy) return;
+    if ((snapshot?.accounts.length ?? 0) > 0 && cur.selectedAccountKeys.length === 0) {
+      cur.error = "请至少选择一个要同步的账号";
+      render();
+      return;
+    }
     cur.fileExportBusy = true;
     cur.error = undefined;
     cur.copyHint = undefined;
@@ -4436,6 +4549,7 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
       const res = await invoke<ExportSyncBundleResponse>("export_sync_bundle", {
         passphrase: cur.fileExportPassDraft,
         includeProxy: cur.includeProxy,
+        accountKeys: cur.selectedAccountKeys,
       });
       if (modal === cur) {
         cur.fileExportResult = res;

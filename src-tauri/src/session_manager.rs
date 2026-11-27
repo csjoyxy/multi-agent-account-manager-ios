@@ -6158,13 +6158,14 @@ impl SessionManager {
     &self,
     app: &AppHandle,
     include_proxy: bool,
+    account_keys: Option<&[String]>,
   ) -> Result<(crate::sync_bundle::SyncBundlePayload, usize), String> {
     let (accounts, group_chats, external_agents) = {
       let locked = self.inner.lock().await;
       if !locked.conflicts.is_empty() {
         return Err("存在 UUID 归属冲突，请先处理冲突后再导出".to_string());
       }
-      let accounts = locked
+      let all_accounts = locked
         .store
         .accounts
         .iter()
@@ -6175,17 +6176,70 @@ impl SessionManager {
             .iter()
             .any(|p| p.provider_id == a.provider_id && p.uuid == a.uuid)
         })
-        .map(|a| {
-          let mut cloned = a.clone();
+        .cloned()
+        .collect::<Vec<_>>();
+      let total_count = all_accounts.len();
+      let selected_set = account_keys.map(|keys| {
+        keys
+          .iter()
+          .map(|k| k.trim().to_ascii_lowercase())
+          .collect::<HashSet<String>>()
+      });
+      let accounts = all_accounts
+        .into_iter()
+        .filter(|a| {
+          if let Some(ref set) = selected_set {
+            let key = format!(
+              "{}:{}",
+              a.provider_id.as_str().to_ascii_lowercase(),
+              a.uuid.to_ascii_lowercase()
+            );
+            set.contains(&key)
+          } else {
+            true
+          }
+        })
+        .map(|mut cloned| {
           if !include_proxy {
             cloned.proxy_url = None;
           }
           cloned
         })
         .collect::<Vec<_>>();
+      if selected_set.is_some() && total_count > 0 && accounts.is_empty() {
+        return Err("请至少选择一个要同步的账号".to_string());
+      }
+      let group_chats = if accounts.len() < total_count {
+        let kept_keys = accounts
+          .iter()
+          .map(|a| (a.provider_id.clone(), a.uuid.to_ascii_lowercase()))
+          .collect::<HashSet<(ProviderId, String)>>();
+        locked
+          .store
+          .group_chats
+          .iter()
+          .cloned()
+          .filter_map(|mut grp| {
+            let member_kept = |m: &AccountKey| -> bool {
+              m.provider_id.is_external()
+                || kept_keys.contains(&(m.provider_id.clone(), m.uuid.to_ascii_lowercase()))
+            };
+            grp.members.retain(&member_kept);
+            grp.member_roles.retain(|r| member_kept(&r.member));
+            grp.thread_bindings.retain(|tb| member_kept(&tb.member));
+            if grp.members.iter().any(|m| !m.provider_id.is_external()) {
+              Some(grp)
+            } else {
+              None
+            }
+          })
+          .collect::<Vec<_>>()
+      } else {
+        locked.store.group_chats.clone()
+      };
       (
         accounts,
-        locked.store.group_chats.clone(),
+        group_chats,
         locked.store.external_agents.clone(),
       )
     };
@@ -6554,8 +6608,11 @@ impl SessionManager {
     app: &AppHandle,
     passphrase: String,
     include_proxy: bool,
+    account_keys: Option<Vec<String>>,
   ) -> Result<crate::sync_bundle::ExportSyncBundleResponse, String> {
-    let (payload, cookie_account_count) = self.build_sync_bundle_payload(app, include_proxy).await?;
+    let (payload, cookie_account_count) = self
+      .build_sync_bundle_payload(app, include_proxy, account_keys.as_deref())
+      .await?;
     let account_count = payload.accounts.len();
     let bundle_json = crate::sync_bundle::encrypt_sync_bundle(&payload, &passphrase)?;
     let filename = format!("account-manager-sync-{}.maam", now_ms() / 1000);
@@ -6613,6 +6670,7 @@ impl SessionManager {
     app: &AppHandle,
     passphrase: Option<String>,
     include_proxy: bool,
+    account_keys: Option<Vec<String>>,
   ) -> Result<crate::sync_bundle::LanSyncShareInfo, String> {
     let _ = self.stop_lan_sync_share(app).await;
 
@@ -6621,7 +6679,9 @@ impl SessionManager {
       None => crate::sync_bundle::generate_lan_pin(),
     };
 
-    let (payload, cookie_account_count) = self.build_sync_bundle_payload(app, include_proxy).await?;
+    let (payload, cookie_account_count) = self
+      .build_sync_bundle_payload(app, include_proxy, account_keys.as_deref())
+      .await?;
     let account_count = payload.accounts.len();
     let encrypted = crate::sync_bundle::encrypt_sync_bundle(&payload, &pass)?;
     let started = crate::sync_bundle::spawn_lan_sync_server(encrypted, pass.clone(), 3, 180).await?;
@@ -6653,12 +6713,15 @@ impl SessionManager {
     app: &AppHandle,
     relay_url: Option<String>,
     include_proxy: bool,
+    account_keys: Option<Vec<String>>,
   ) -> Result<crate::sync_bundle::LanSyncShareInfo, String> {
     let _ = self.stop_lan_sync_share(app).await;
 
     let base_url =
       crate::sync_bundle::normalize_relay_base_url(relay_url.as_deref().unwrap_or(""))?;
-    let (payload, cookie_account_count) = self.build_sync_bundle_payload(app, include_proxy).await?;
+    let (payload, cookie_account_count) = self
+      .build_sync_bundle_payload(app, include_proxy, account_keys.as_deref())
+      .await?;
     let account_count = payload.accounts.len();
     let prepared = crate::sync_bundle::prepare_relay_drop(&payload, &base_url, 3, 180)?;
     crate::sync_bundle::upload_relay_drop(app, &base_url, prepared.upload_json).await?;
@@ -6803,10 +6866,13 @@ impl SessionManager {
     filename: Option<String>,
     passphrase: String,
     include_proxy: bool,
+    account_keys: Option<Vec<String>>,
   ) -> Result<crate::sync_bundle::WebDavPushResult, String> {
     let _ = crate::sync_bundle::normalize_webdav_target(&url, filename.as_deref())?;
     let _ = crate::sync_bundle::validate_sync_passphrase(&passphrase)?;
-    let (payload, cookie_account_count) = self.build_sync_bundle_payload(app, include_proxy).await?;
+    let (payload, cookie_account_count) = self
+      .build_sync_bundle_payload(app, include_proxy, account_keys.as_deref())
+      .await?;
     let account_count = payload.accounts.len();
     let encrypted = crate::sync_bundle::encrypt_sync_bundle(&payload, &passphrase)?;
     let size_bytes = encrypted.len();
