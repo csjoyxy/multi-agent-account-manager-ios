@@ -76,6 +76,55 @@
 2. 当多个 Muse 账号共用同一代理或均走系统默认代理时，保持默认开启可避免多实例并发请求触发 IP 频控；若已为各账号分别配置独立出口代理，可关闭隔离开关以恢复全部后台预热。
 3. iOS / Android 移动端每次仅单开当前账号会话，返回即关闭，无后台保活与定时轮询，无需额外配置。
 
+### 5. 为每个账号单独配置代理（以 Windows Clash Verge 为例）
+
+1. **添加全局扩展脚本**：打开 **Clash Verge**，进入左侧 **「订阅」** 页面，找到 **「全局扩展脚本」**，右键选择 **「编辑文件」**，写入以下脚本：
+
+   <p align="center">
+     <img src="docs/screenshots/clash-verge-script.jpg" alt="Clash Verge 全局扩展脚本右键编辑" width="76%" />
+   </p>
+
+   ```js
+   function main(config) {
+     const count = 5;          // 代理数量可自行更改
+     const startPort = 17891;  // 起始端口号可自行更改
+     const allNames = (config.proxies || []).map(p => p.name);
+
+     const accGroups = [];
+     const accListeners = [];
+     for (let i = 1; i <= count; i++) {
+       const name = `账号${i}出口`;
+       accGroups.push({ name, type: "select", proxies: [...allNames] });
+       accListeners.push({
+         name: `acc${i}`,
+         type: "http",
+         port: startPort + i - 1,
+         listen: "127.0.0.1",
+         proxy: name,
+       });
+     }
+
+     config["proxy-groups"] = [...accGroups, ...(config["proxy-groups"] || [])];
+     config.listeners = [...(config.listeners || []), ...accListeners];
+     return config;
+   }
+   ```
+
+2. **为每个出口分组选择节点**：保存并启用脚本后，在 Clash Verge 左侧 **「代理」** 页面会出现 `账号1出口`、`账号2出口` 等策略组，分别为每个分组选择不同的代理节点。
+
+   <p align="center">
+     <img src="docs/screenshots/clash-verge-groups.jpg" alt="Clash Verge 为每个账号策略组选择不同节点" width="76%" />
+   </p>
+3. **在叠号中绑定端口并测试**：打开叠号对应账号的 **「账号设置」**，在 **「HTTP CONNECT 代理」** 中填入对应本地代理地址（如 `http://127.0.0.1:17891` ～ `http://127.0.0.1:17895`，每个端口对应一个出口节点），点击 **「测试连接」** 显示成功即可；也可按需在下方搭配 **「自定义时区」**。
+
+> **平台补充说明**：Android 由于系统机制限制，暂不支持为每个账号单独配置代理；macOS / iOS 使用 Shadowrocket（小火箭）无法按端口分流，改用支持多 `listeners` 入站的 Clash 类客户端配置逻辑基本相同。
+
+<p align="center">
+  <img src="docs/screenshots/proxy-muse1.jpg" alt="Muse1 独立代理配置" width="240" />
+  <img src="docs/screenshots/proxy-muse2.jpg" alt="Muse2 独立代理配置" width="240" />
+  <img src="docs/screenshots/proxy-muse3.jpg" alt="Muse3 独立代理配置" width="240" />
+</p>
+
 ---
 
 ## 界面预览
