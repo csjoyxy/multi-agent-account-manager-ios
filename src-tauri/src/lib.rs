@@ -15,7 +15,9 @@ use site_adapters::SiteAdaptersSnapshot;
 use storage::{
   AccountKey, ExternalAgentKind, GroupMemberRole, GroupSharedSkill, GroupWorkflowMode,
 };
-use sync_bundle::{ExportSyncBundleResponse, LanSyncShareInfo};
+use sync_bundle::{
+  ExportSyncBundleResponse, LanSyncShareInfo, WebDavPushResult, WebDavTestResult,
+};
 #[cfg(desktop)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -356,6 +358,62 @@ async fn scan_sync_qr_code(
     return Err("仅账号管理页可以调用扫码同步".to_string());
   }
   mgr.scan_sync_qr_code(&app).await
+}
+
+#[tauri::command]
+async fn test_webdav_sync(
+  app: AppHandle,
+  mgr: State<'_, Arc<SessionManager>>,
+  webview: tauri::Webview,
+  url: String,
+  username: String,
+  password: String,
+  filename: Option<String>,
+) -> Result<WebDavTestResult, String> {
+  if webview.label() != "manager" {
+    return Err("仅账号管理页可以测试 WebDAV 同步".to_string());
+  }
+  mgr
+    .test_webdav_sync(&app, url, username, password, filename)
+    .await
+}
+
+#[tauri::command]
+async fn push_webdav_sync(
+  app: AppHandle,
+  mgr: State<'_, Arc<SessionManager>>,
+  webview: tauri::Webview,
+  url: String,
+  username: String,
+  password: String,
+  filename: Option<String>,
+  passphrase: String,
+) -> Result<WebDavPushResult, String> {
+  if webview.label() != "manager" {
+    return Err("仅账号管理页可以上传 WebDAV 同步".to_string());
+  }
+  mgr
+    .push_webdav_sync(&app, url, username, password, filename, passphrase)
+    .await
+}
+
+#[tauri::command]
+async fn pull_webdav_sync(
+  app: AppHandle,
+  mgr: State<'_, Arc<SessionManager>>,
+  webview: tauri::Webview,
+  url: String,
+  username: String,
+  password: String,
+  filename: Option<String>,
+  passphrase: String,
+) -> Result<ImportSyncBundleResponse, String> {
+  if webview.label() != "manager" {
+    return Err("仅账号管理页可以拉取 WebDAV 同步".to_string());
+  }
+  mgr
+    .pull_webdav_sync(&app, url, username, password, filename, passphrase)
+    .await
 }
 
 #[tauri::command]
@@ -805,6 +863,9 @@ pub fn run() {
       stop_lan_sync_share,
       pull_lan_sync_share,
       scan_sync_qr_code,
+      test_webdav_sync,
+      push_webdav_sync,
+      pull_webdav_sync,
     ])
     .build(tauri::generate_context!())
     .expect("error while building tauri application")

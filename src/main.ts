@@ -27,6 +27,8 @@ import type {
   ThemeMode,
   UpdateCheckResult,
   UpdateProgressEvent,
+  WebDavPushResult,
+  WebDavTestResult,
 } from "./types";
 
 type AccountDraft = {
@@ -110,7 +112,7 @@ type ModalMode =
     }
   | {
       kind: "sync";
-      tab: "lan" | "file";
+      tab: "lan" | "webdav" | "file";
       relayEnabled: boolean;
       relayUrlDraft: string;
       lanSharePassDraft: string;
@@ -120,6 +122,15 @@ type ModalMode =
       lanPullPassDraft: string;
       lanPullBusy?: boolean;
       lanScanBusy?: boolean;
+      webdavUrlDraft: string;
+      webdavUserDraft: string;
+      webdavPassDraft: string;
+      webdavFilenameDraft: string;
+      webdavSyncPassDraft: string;
+      webdavTestBusy?: boolean;
+      webdavPushBusy?: boolean;
+      webdavPullBusy?: boolean;
+      webdavHint?: string;
       fileExportPassDraft: string;
       fileExportResult?: ExportSyncBundleResponse | null;
       fileExportBusy?: boolean;
@@ -1348,6 +1359,9 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
       modal.lanShareBusy ||
         modal.lanPullBusy ||
         modal.lanScanBusy ||
+        modal.webdavTestBusy ||
+        modal.webdavPushBusy ||
+        modal.webdavPullBusy ||
         modal.fileExportBusy ||
         modal.fileImportBusy
     );
@@ -1419,7 +1433,33 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
             </div>
           </div>
         `
-        : `
+        : modal.tab === "webdav"
+          ? `
+          <div class="sync-section">
+            <div class="sync-section-title">WebDAV 服务器配置</div>
+            <div class="modal-hint">支持坚果云、Nextcloud、AList / OpenList、NAS 等标准 WebDAV（公网需使用 HTTPS，局域网可用 HTTP）。连接或同步成功后会自动记住地址与凭据。</div>
+            <input id="sync-webdav-url" class="modal-input" maxlength="512" placeholder="WebDAV 地址（如 https://dav.jianguoyun.com/dav/diehao/）" value="${escapeHtml(modal.webdavUrlDraft)}" autocomplete="off" spellcheck="false" ${busyAny ? "disabled" : ""} />
+            <div class="sync-inline-row">
+              <input id="sync-webdav-user" class="modal-input" maxlength="128" placeholder="用户名 / 邮箱" value="${escapeHtml(modal.webdavUserDraft)}" autocomplete="off" spellcheck="false" ${busyAny ? "disabled" : ""} />
+              <input id="sync-webdav-pass" class="modal-input" type="password" maxlength="256" placeholder="应用密码" value="${escapeHtml(modal.webdavPassDraft)}" autocomplete="off" ${busyAny ? "disabled" : ""} />
+            </div>
+            <div class="sync-inline-row">
+              <input id="sync-webdav-filename" class="modal-input" maxlength="128" placeholder="同步文件名（默认 maam-sync.maam）" value="${escapeHtml(modal.webdavFilenameDraft)}" autocomplete="off" spellcheck="false" ${busyAny ? "disabled" : ""} />
+              <button id="sync-webdav-test-btn" class="btn" type="button" ${busyAny ? "disabled" : ""}>${modal.webdavTestBusy ? "测试中..." : "测试连接"}</button>
+            </div>
+            ${modal.webdavHint ? `<div class="modal-hint">${escapeHtml(modal.webdavHint)}</div>` : ""}
+          </div>
+          <div class="sync-section">
+            <div class="sync-section-title">端到端加密上传与增量拉取</div>
+            <div class="sync-privacy-note">所有账号、代理、时区、群聊与 Cookie 均在本地使用 AES-256-GCM 加密后上传，WebDAV 网盘仅保存密文（加密口令不会保存或上传）；拉取采用增量合并，不删除本机已有账号。</div>
+            <input id="sync-webdav-sync-pass" class="modal-input" type="password" maxlength="128" placeholder="设置/输入端到端加密口令（至少 4 位，两端需一致）" value="${escapeHtml(modal.webdavSyncPassDraft)}" autocomplete="off" ${busyAny ? "disabled" : ""} />
+            <div class="sync-ops-row">
+              <button id="sync-webdav-push-btn" class="btn primary" type="button" ${busyAny ? "disabled" : ""}>${modal.webdavPushBusy ? "加密上传中..." : "加密上传到 WebDAV"}</button>
+              <button id="sync-webdav-pull-btn" class="btn" type="button" ${busyAny ? "disabled" : ""}>${modal.webdavPullBusy ? "拉取解密中..." : "从 WebDAV 拉取并合并"}</button>
+            </div>
+          </div>
+        `
+          : `
           <div class="sync-section">
             <div class="sync-section-title">导出加密备份（.maam）</div>
             <div class="modal-hint">AES-256-GCM 端到端加密包含所有账号、代理、时区、群聊与 Cookie 登录态。</div>
@@ -1457,6 +1497,7 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
           <div class="modal-title">多端加密同步</div>
           <div class="sync-tabs">
             <button id="sync-tab-lan" class="sync-tab-btn ${modal.tab === "lan" ? "active" : ""}" type="button" ${busyAny ? "disabled" : ""}>扫码 / 局域网</button>
+            <button id="sync-tab-webdav" class="sync-tab-btn ${modal.tab === "webdav" ? "active" : ""}" type="button" ${busyAny ? "disabled" : ""}>WebDAV 云同步</button>
             <button id="sync-tab-file" class="sync-tab-btn ${modal.tab === "file" ? "active" : ""}" type="button" ${busyAny ? "disabled" : ""}>加密备份文件</button>
           </div>
           ${tabBody}
@@ -3971,6 +4012,12 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
       lanShareInfo: null,
       lanPullAddrDraft: "",
       lanPullPassDraft: "",
+      webdavUrlDraft: state.settings.webdav?.url ?? "",
+      webdavUserDraft: state.settings.webdav?.username ?? "",
+      webdavPassDraft: state.settings.webdav?.password ?? "",
+      webdavFilenameDraft: state.settings.webdav?.filename || "maam-sync.maam",
+      webdavSyncPassDraft: "",
+      webdavHint: undefined,
       fileExportPassDraft: "",
       fileExportResult: null,
       fileImportJsonDraft: "",
@@ -4008,6 +4055,16 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
     modal.tab = "lan";
     modal.error = undefined;
     modal.copyHint = undefined;
+    modal.webdavHint = undefined;
+    render();
+  });
+
+  document.querySelector("#sync-tab-webdav")?.addEventListener("click", () => {
+    if (modal.kind !== "sync") return;
+    modal.tab = "webdav";
+    modal.error = undefined;
+    modal.copyHint = undefined;
+    modal.webdavHint = undefined;
     render();
   });
 
@@ -4016,7 +4073,127 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
     modal.tab = "file";
     modal.error = undefined;
     modal.copyHint = undefined;
+    modal.webdavHint = undefined;
     render();
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-webdav-url")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.webdavUrlDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+    modal.webdavHint = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-webdav-user")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.webdavUserDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-webdav-pass")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.webdavPassDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-webdav-filename")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.webdavFilenameDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-webdav-sync-pass")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.webdavSyncPassDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+  });
+
+  document.querySelector("#sync-webdav-test-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync" || cur.webdavTestBusy) return;
+    cur.webdavTestBusy = true;
+    cur.error = undefined;
+    cur.webdavHint = undefined;
+    render();
+    try {
+      const res = await invoke<WebDavTestResult>("test_webdav_sync", {
+        url: cur.webdavUrlDraft.trim(),
+        username: cur.webdavUserDraft.trim(),
+        password: cur.webdavPassDraft,
+        filename: cur.webdavFilenameDraft.trim() || null,
+      });
+      if (modal === cur) {
+        cur.webdavHint = res.message;
+      }
+    } catch (err) {
+      if (modal === cur) cur.error = String(err);
+    } finally {
+      if (modal === cur) {
+        cur.webdavTestBusy = false;
+        render();
+      }
+    }
+  });
+
+  document.querySelector("#sync-webdav-push-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync" || cur.webdavPushBusy || cur.webdavPullBusy) return;
+    cur.webdavPushBusy = true;
+    cur.error = undefined;
+    cur.webdavHint = undefined;
+    cur.importSummary = null;
+    render();
+    try {
+      const res = await invoke<WebDavPushResult>("push_webdav_sync", {
+        url: cur.webdavUrlDraft.trim(),
+        username: cur.webdavUserDraft.trim(),
+        password: cur.webdavPassDraft,
+        filename: cur.webdavFilenameDraft.trim() || null,
+        passphrase: cur.webdavSyncPassDraft,
+      });
+      if (modal === cur) {
+        const kb = Math.max(1, Math.round(res.sizeBytes / 1024));
+        cur.webdavHint = `已加密上传 ${res.accountCount} 个账号（含 ${res.cookieAccountCount} 个登录态，约 ${kb} KB）至 WebDAV`;
+      }
+    } catch (err) {
+      if (modal === cur) cur.error = String(err);
+    } finally {
+      if (modal === cur) {
+        cur.webdavPushBusy = false;
+        render();
+      }
+    }
+  });
+
+  document.querySelector("#sync-webdav-pull-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync" || cur.webdavPullBusy || cur.webdavPushBusy) return;
+    cur.webdavPullBusy = true;
+    cur.error = undefined;
+    cur.webdavHint = undefined;
+    cur.importSummary = null;
+    render();
+    try {
+      const res = await invoke<ImportSyncBundleResponse>("pull_webdav_sync", {
+        url: cur.webdavUrlDraft.trim(),
+        username: cur.webdavUserDraft.trim(),
+        password: cur.webdavPassDraft,
+        filename: cur.webdavFilenameDraft.trim() || null,
+        passphrase: cur.webdavSyncPassDraft,
+      });
+      snapshot = res.snapshot;
+      syncViewModeFromSnapshot(snapshot);
+      if (modal === cur) {
+        cur.importSummary = res.summary;
+      }
+    } catch (err) {
+      if (modal === cur) cur.error = String(err);
+    } finally {
+      if (modal === cur) {
+        cur.webdavPullBusy = false;
+        render();
+      }
+    }
   });
 
   document.querySelector<HTMLInputElement>("#sync-lan-share-pass")?.addEventListener("input", (ev) => {

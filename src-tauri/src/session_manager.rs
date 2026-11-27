@@ -6721,6 +6721,121 @@ impl SessionManager {
     }
   }
 
+  async fn persist_webdav_config(
+    &self,
+    app: &AppHandle,
+    url: &str,
+    username: &str,
+    password: &str,
+    filename: Option<&str>,
+  ) -> Result<(), String> {
+    let clean_file = filename
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+      .unwrap_or("maam-sync.maam")
+      .to_string();
+    let snap = {
+      let mut locked = self.inner.lock().await;
+      let previous = locked.store.settings.webdav.clone();
+      locked.store.settings.webdav = crate::storage::WebDavConfig {
+        url: url.trim().to_string(),
+        username: username.trim().to_string(),
+        password: password.to_string(),
+        filename: clean_file,
+      };
+      if let Err(err) = save_store_atomic(&locked.store_path, &locked.store) {
+        locked.store.settings.webdav = previous;
+        return Err(err);
+      }
+      Self::snapshot_from_locked(&locked)
+    };
+    self.emit_snapshot(app, &snap);
+    Ok(())
+  }
+
+  pub async fn test_webdav_sync(
+    &self,
+    app: &AppHandle,
+    url: String,
+    username: String,
+    password: String,
+    filename: Option<String>,
+  ) -> Result<crate::sync_bundle::WebDavTestResult, String> {
+    let res = crate::sync_bundle::test_webdav_connection(
+      app,
+      &url,
+      &username,
+      &password,
+      filename.as_deref(),
+    )
+    .await?;
+    let _ = self
+      .persist_webdav_config(app, &url, &username, &password, filename.as_deref())
+      .await;
+    Ok(res)
+  }
+
+  pub async fn push_webdav_sync(
+    &self,
+    app: &AppHandle,
+    url: String,
+    username: String,
+    password: String,
+    filename: Option<String>,
+    passphrase: String,
+  ) -> Result<crate::sync_bundle::WebDavPushResult, String> {
+    let _ = crate::sync_bundle::normalize_webdav_target(&url, filename.as_deref())?;
+    let _ = crate::sync_bundle::validate_sync_passphrase(&passphrase)?;
+    let (payload, cookie_account_count) = self.build_sync_bundle_payload(app).await?;
+    let account_count = payload.accounts.len();
+    let encrypted = crate::sync_bundle::encrypt_sync_bundle(&payload, &passphrase)?;
+    let size_bytes = encrypted.len();
+    let remote_url = crate::sync_bundle::upload_webdav_bundle(
+      app,
+      &url,
+      &username,
+      &password,
+      filename.as_deref(),
+      encrypted,
+    )
+    .await?;
+    let _ = self
+      .persist_webdav_config(app, &url, &username, &password, filename.as_deref())
+      .await;
+    Ok(crate::sync_bundle::WebDavPushResult {
+      remote_url,
+      account_count,
+      cookie_account_count,
+      size_bytes,
+    })
+  }
+
+  pub async fn pull_webdav_sync(
+    self: &Arc<Self>,
+    app: &AppHandle,
+    url: String,
+    username: String,
+    password: String,
+    filename: Option<String>,
+    passphrase: String,
+  ) -> Result<ImportSyncBundleResponse, String> {
+    let _ = crate::sync_bundle::normalize_webdav_target(&url, filename.as_deref())?;
+    let _ = crate::sync_bundle::validate_sync_passphrase(&passphrase)?;
+    let encrypted = crate::sync_bundle::download_webdav_bundle(
+      app,
+      &url,
+      &username,
+      &password,
+      filename.as_deref(),
+    )
+    .await?;
+    let payload = crate::sync_bundle::decrypt_sync_bundle(&encrypted, &passphrase)?;
+    let _ = self
+      .persist_webdav_config(app, &url, &username, &password, filename.as_deref())
+      .await;
+    self.apply_sync_bundle(app, payload).await
+  }
+
   pub async fn set_modal_active(
     &self,
     app: &AppHandle,
