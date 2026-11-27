@@ -77,7 +77,9 @@ final class AccountSessionCoordinator {
     "turnstile.cloudflare.com",
     "hcaptcha.com",
     "recaptcha.net",
+    "recaptcha.google.com",
     "gstatic.com",
+    "fbsbx.com",
     "arkoselabs.com",
     "funcaptcha.com",
     "friendlycaptcha.com",
@@ -246,6 +248,7 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
   private var capturedTypedIdentity: String = ""
   private var probeTimer: Timer?
   private var staleResetDone = false
+  private var hasConfirmedAuth = false
 
   private let headerView = UIView()
   private let backButton = UIButton(type: .system)
@@ -425,6 +428,7 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
     consecutiveLoggedOutCount = 0
     capturedTypedIdentity = ""
     staleResetDone = false
+    hasConfirmedAuth = false
     titleLabel.text = "\(spec.providerName) · \(spec.alias)"
 
     closePopupWebView()
@@ -605,7 +609,10 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
 
   func handleProcessDidTerminate(_ webView: WKWebView) {
     if webView === mainWebView {
-      webView.reload()
+      let uuid = currentSpec.uuid
+      IosProfileStoreManager.shared.rehydrateCookiesIntoMemoryStore(uuid: uuid) { [weak webView] in
+        webView?.reload()
+      }
     } else if webView === popupWebView {
       closePopupWebView()
     }
@@ -768,8 +775,10 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
       let stale = (dict["staleSession"] as? Bool) ?? false
 
       if isAuth {
+        self.hasConfirmedAuth = true
         self.consecutiveLoggedOutCount = 0
         self.staleResetDone = false
+        IosProfileStoreManager.shared.flushCookiesThrottled(uuid: spec.uuid, minInterval: 4.0)
         let email = (dict["email"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedId = !email.isEmpty ? email : self.capturedTypedIdentity
         let avatar = dict["avatar"] as? String
@@ -793,7 +802,7 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
         self.consecutiveLoggedOutCount += 1
         if self.consecutiveLoggedOutCount >= 2 {
           AccountSessionCoordinator.shared.emitSessionLoggedOut(spec: spec)
-          if stale && !self.staleResetDone {
+          if stale && !self.staleResetDone && self.hasConfirmedAuth && self.capturedTypedIdentity.isEmpty {
             self.staleResetDone = true
             if spec.providerId == "muse", let logoutUrl = URL(string: "https://muse.ai/api/logout") {
               self.mainWebView?.load(URLRequest(url: logoutUrl))
@@ -801,6 +810,7 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
               self.mainWebView?.load(URLRequest(url: loginUrl))
             }
           }
+          self.hasConfirmedAuth = false
         }
       }
     }
@@ -817,7 +827,13 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
     const isPrimaryHost = initHost === 'muse.ai' || initHost.endsWith('.muse.ai') || initHost === 'app.hark.com' || initHost.endsWith('.hark.com');
     const authCheck = window.__maamAuthCheck || { status: 'unknown', checkedAt: 0, inflight: false };
     window.__maamAuthCheck = authCheck;
+    let pending401VerifyTimer = null;
+    let lastAuthOkAt = 0;
     const markAuthInvalid = () => {
+      if (pending401VerifyTimer) {
+        clearTimeout(pending401VerifyTimer);
+        pending401VerifyTimer = null;
+      }
       authCheck.status = 'invalid';
       authCheck.checkedAt = Date.now();
       window.__maamQuota = null;
@@ -828,8 +844,13 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
       } catch (_) {}
     };
     const markAuthOk = () => {
+      if (pending401VerifyTimer) {
+        clearTimeout(pending401VerifyTimer);
+        pending401VerifyTimer = null;
+      }
+      lastAuthOkAt = Date.now();
       authCheck.status = 'ok';
-      authCheck.checkedAt = Date.now();
+      authCheck.checkedAt = lastAuthOkAt;
     };
     const setQuota = (text, pct) => {
       if (!text) return;
@@ -975,6 +996,17 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
       }
     };
     const origFetch = window.fetch;
+    const scheduleVerifyAfter401 = () => {
+      if (pending401VerifyTimer) return;
+      const triggeredAt = Date.now();
+      pending401VerifyTimer = setTimeout(() => {
+        pending401VerifyTimer = null;
+        if (lastAuthOkAt > triggeredAt) return;
+        if (typeof window.__maamVerifySession === 'function') {
+          window.__maamVerifySession(true);
+        }
+      }, 1800);
+    };
     if (isPrimaryHost && typeof origFetch === 'function') {
       window.fetch = function(...args) {
         const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
@@ -983,8 +1015,13 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
           try {
             const parsedUrl = new URL(reqUrl || '', location.origin);
             const path = parsedUrl.origin === location.origin ? parsedUrl.pathname : '';
-            if (res.status === 401 && path.startsWith('/api/')) markAuthInvalid();
-            else if (res.ok && (path === '/api/client-version' || path === '/api/auth/check' || path === '/api/profile' || path === '/api/billing/summary' || path.startsWith('/api/chat'))) markAuthOk();
+            if (res.status === 401 && path.startsWith('/api/')) {
+              if (!/^\/api\/(?:auth|login|signin|signup|otp|verify|refresh|token)\b/i.test(path)) {
+                scheduleVerifyAfter401();
+              }
+            } else if (res.ok && path.startsWith('/api/') && !/^\/api\/(?:login|signin|signup|otp|logout)\b/i.test(path)) {
+              markAuthOk();
+            }
             const ct = (res.headers && res.headers.get('content-type')) || '';
             if (!ct.includes('event-stream') && (ct.includes('json') || ct.includes('text'))) {
               res.clone().text().then(inspectText).catch(() => {});
@@ -994,10 +1031,10 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
         return p;
       };
     }
-    window.__maamVerifySession = async () => {
+    window.__maamVerifySession = async (forceCheck) => {
       if (authCheck.inflight || typeof origFetch !== 'function') return;
       const now = Date.now();
-      if (authCheck.checkedAt && now - authCheck.checkedAt < 12000) return;
+      if (!forceCheck && authCheck.checkedAt && now - authCheck.checkedAt < 12000) return;
       authCheck.inflight = true;
       try {
         if (initHost.endsWith('muse.ai')) {
@@ -1156,9 +1193,11 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
     const path = (location.pathname || '').toLowerCase();
     const isMetaCenter = host === 'accountscenter.meta.com';
     const isPrimary = host === 'muse.ai' || host.endsWith('.muse.ai') || host === 'app.hark.com' || host.endsWith('.hark.com');
-    const isExtLogin = host === 'meta.com' || host.endsWith('.meta.com') || host === 'facebook.com' || host.endsWith('.facebook.com') || host === 'appleid.apple.com';
-    const loginInputs = document.querySelectorAll('input[type="email"], input[type="password"], input[autocomplete="one-time-code"], input[placeholder*="邮箱"], input[placeholder*="email" i]');
+    const isExtLogin = host === 'meta.com' || host.endsWith('.meta.com') || host === 'facebook.com' || host.endsWith('.facebook.com') || host === 'instagram.com' || host.endsWith('.instagram.com') || host === 'appleid.apple.com' || host === 'idmsa.apple.com';
+    const loginInputs = document.querySelectorAll('input[type="email"], input[type="password"], input[type="tel"], input[autocomplete="one-time-code"], input[autocomplete*="email" i], input[inputmode="email"], input[inputmode="numeric"], input[name*="email" i], input[name*="phone" i], input[name*="code" i], input[name*="otp" i], input[id*="email" i], input[id*="code" i], input[id*="otp" i], input[maxlength="1"], input[maxlength="6"], input[placeholder*="邮箱"], input[placeholder*="手机"], input[placeholder*="验证码"], input[placeholder*="email" i], input[placeholder*="phone" i], input[placeholder*="code" i], input[aria-label*="邮箱"], input[aria-label*="验证码"], input[aria-label*="email" i], input[aria-label*="code" i]');
     const hasLoginInput = Array.from(loginInputs).some((i) => !i.disabled && !i.readOnly && i.getBoundingClientRect().width > 20);
+    const activeEl = document.activeElement;
+    const hasFocusedInput = Boolean(activeEl && activeEl.tagName === 'INPUT' && !activeEl.disabled && !activeEl.readOnly);
     const hasComposer = Array.from(document.querySelectorAll('textarea, [contenteditable="true"]')).some((el) => !el.disabled && !el.readOnly && el.getBoundingClientRect().width > 100);
     const bodyText = (document.body && document.body.innerText) || '';
     const bad = /^(support|privacy|help|legal|press|noreply|no-reply|info|security|contact|abuse|feedback|sales|terms|hello|team|admin)@/i;
@@ -1170,19 +1209,23 @@ final class AccountWebViewController: UIViewController, WKNavigationDelegate, WK
         const metaEmail = cands.find((e) => !providerMail.test(e)) || cands[0] || '';
         return JSON.stringify({ auth: false, loggedOut: false, staleSession: false, typed, email: metaEmail, avatar: '', quotaText: '', quotaPct: null, quotaDetail: null });
       }
-      return JSON.stringify({ auth: false, loggedOut: /^\/(login|signin|signup|auth)\b/.test(path) || hasLoginInput, staleSession: false, typed, email: '', avatar: '', quotaText: '', quotaPct: null, quotaDetail: null });
+      return JSON.stringify({ auth: false, loggedOut: /^\/(login|signin|signup|auth)\b/.test(path) || hasLoginInput || hasFocusedInput, staleSession: false, typed, email: '', avatar: '', quotaText: '', quotaPct: null, quotaDetail: null });
     }
     if (!isPrimary || document.readyState !== 'complete') {
       return JSON.stringify({ auth: false, loggedOut: false, staleSession: false, typed, email: '', avatar: '', quotaText: '', quotaPct: null, quotaDetail: null });
     }
-    if (/^\/(login|signin|signup|auth)\b/.test(path) || (!hasComposer && hasLoginInput) || (!hasComposer && /登录或创建账户|Log in or sign up|Sign in to|登录以继续/i.test(bodyText))) {
+    if (/^\/(login|signin|signup|auth)\b/.test(path) || (!hasComposer && (hasLoginInput || hasFocusedInput)) || (!hasComposer && /登录或创建账户|登录\s*Muse|Log in to Muse|使用其他账户|Use another account|Log in or sign up|Sign in to|登录以继续|通过\s*Google\s*继续|Continue with Google|通过\s*Apple\s*继续|Continue with Apple|Continue with email|使用邮箱继续|输入验证码|验证码|verification code|enter the code|Enter code|check your email|检查你的邮箱|手机号或邮箱/i.test(bodyText))) {
       return JSON.stringify({ auth: false, loggedOut: true, staleSession: false, typed, email: '', avatar: '', quotaText: '', quotaPct: null, quotaDetail: null });
     }
     if (!hasComposer && window.__maamAuthCheck && window.__maamAuthCheck.status === 'invalid') {
-      return JSON.stringify({ auth: false, loggedOut: true, staleSession: true, typed, email: '', avatar: '', quotaText: '', quotaPct: null, quotaDetail: null });
+      const staleSession = !(hasLoginInput || hasFocusedInput || Boolean(typed));
+      return JSON.stringify({ auth: false, loggedOut: true, staleSession, typed, email: '', avatar: '', quotaText: '', quotaPct: null, quotaDetail: null });
     }
     if (!hasComposer && typeof window.__maamVerifySession === 'function') {
       window.__maamVerifySession();
+    }
+    if (!hasComposer && (!window.__maamAuthCheck || window.__maamAuthCheck.status !== 'ok')) {
+      return JSON.stringify({ auth: false, loggedOut: false, staleSession: false, typed, email: '', avatar: '', quotaText: '', quotaPct: null, quotaDetail: null });
     }
     let detail = window.__maamQuotaDetail || null;
     if (!detail) {

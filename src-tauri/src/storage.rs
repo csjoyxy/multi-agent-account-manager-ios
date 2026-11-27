@@ -18,6 +18,38 @@ fn default_relay_hops() -> u8 {
   2
 }
 
+fn default_silent_sync_interval_mins() -> u16 {
+  15
+}
+
+fn default_webdav_filename() -> String {
+  "maam-sync.maam".to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebDavConfig {
+  #[serde(default)]
+  pub url: String,
+  #[serde(default)]
+  pub username: String,
+  #[serde(default)]
+  pub password: String,
+  #[serde(default = "default_webdav_filename")]
+  pub filename: String,
+}
+
+impl Default for WebDavConfig {
+  fn default() -> Self {
+    Self {
+      url: String::new(),
+      username: String::new(),
+      password: String::new(),
+      filename: default_webdav_filename(),
+    }
+  }
+}
+
 pub fn default_global_shortcut() -> String {
   #[cfg(target_os = "macos")]
   {
@@ -38,6 +70,12 @@ pub struct AppSettings {
   pub global_shortcut: String,
   #[serde(default)]
   pub auto_approve: bool,
+  #[serde(default = "default_true")]
+  pub isolate_same_proxy_keep_alive: bool,
+  #[serde(default = "default_silent_sync_interval_mins")]
+  pub silent_sync_interval_mins: u16,
+  #[serde(default)]
+  pub webdav: WebDavConfig,
 }
 
 impl Default for AppSettings {
@@ -46,6 +84,9 @@ impl Default for AppSettings {
       minimize_to_tray: true,
       global_shortcut: default_global_shortcut(),
       auto_approve: false,
+      isolate_same_proxy_keep_alive: true,
+      silent_sync_interval_mins: default_silent_sync_interval_mins(),
+      webdav: WebDavConfig::default(),
     }
   }
 }
@@ -560,6 +601,39 @@ fn migrate_from_value(root: Value) -> Result<(AccountsStoreFile, bool), String> 
       .and_then(|v| v.as_bool())
     {
       settings.auto_approve = auto_approve;
+    }
+    if let Some(isolate) = settings_obj
+      .get("isolateSameProxyKeepAlive")
+      .or_else(|| settings_obj.get("isolate_same_proxy_keep_alive"))
+      .and_then(|v| v.as_bool())
+    {
+      settings.isolate_same_proxy_keep_alive = isolate;
+    }
+    if let Some(interval) = settings_obj
+      .get("silentSyncIntervalMins")
+      .or_else(|| settings_obj.get("silent_sync_interval_mins"))
+      .and_then(|v| v.as_u64())
+    {
+      settings.silent_sync_interval_mins = interval.min(120) as u16;
+    }
+    if let Some(webdav_obj) = settings_obj.get("webdav").and_then(|v| v.as_object()) {
+      if let Some(u) = webdav_obj.get("url").and_then(|v| v.as_str()) {
+        settings.webdav.url = u.trim().to_string();
+      }
+      if let Some(u) = webdav_obj.get("username").and_then(|v| v.as_str()) {
+        settings.webdav.username = u.trim().to_string();
+      }
+      if let Some(p) = webdav_obj.get("password").and_then(|v| v.as_str()) {
+        settings.webdav.password = p.to_string();
+      }
+      if let Some(f) = webdav_obj
+        .get("filename")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+      {
+        settings.webdav.filename = f.to_string();
+      }
     }
   }
 

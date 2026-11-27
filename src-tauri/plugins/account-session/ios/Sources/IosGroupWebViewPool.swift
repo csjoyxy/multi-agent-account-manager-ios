@@ -1,3 +1,4 @@
+// Created by csjoyxy in 2026 for iOS Group Chat WebView pooling in https://github.com/csjoyxy/multi-agent-account-manager-ios (Apache-2.0, derived from https://github.com/ldjx7/multi-agent-account-manager).
 import CoreFoundation
 import Foundation
 import UIKit
@@ -54,6 +55,7 @@ final class PooledAccountWebView: NSObject, WKNavigationDelegate, WKUIDelegate {
   var allowedHosts: [String]
   let proxyUrl: String?
   let timezone: String?
+  let timezoneInitScript: String?
   let viewInstanceId: UInt64
   let webView: WKWebView
 
@@ -70,6 +72,7 @@ final class PooledAccountWebView: NSObject, WKNavigationDelegate, WKUIDelegate {
     allowedHosts: [String],
     proxyUrl: String?,
     timezone: String?,
+    timezoneInitScript: String?,
     viewInstanceId: UInt64,
     webView: WKWebView
   ) {
@@ -78,6 +81,7 @@ final class PooledAccountWebView: NSObject, WKNavigationDelegate, WKUIDelegate {
     self.allowedHosts = allowedHosts
     self.proxyUrl = proxyUrl
     self.timezone = timezone
+    self.timezoneInitScript = timezoneInitScript
     self.viewInstanceId = viewInstanceId
     self.webView = webView
     self.lastUsedMs = Self.nowMs()
@@ -415,6 +419,7 @@ final class IosGroupWebViewPool {
         allowedHosts: spec.allowedHosts,
         proxyUrl: normProxy,
         timezone: normTz,
+        timezoneInitScript: spec.timezoneInitScript,
         viewInstanceId: spec.viewInstanceId,
         webView: wv
       )
@@ -533,6 +538,7 @@ final class IosGroupWebViewPool {
         allowedHosts: spec.allowedHosts,
         proxyUrl: normProxy,
         timezone: normTz,
+        timezoneInitScript: spec.timezoneInitScript,
         viewInstanceId: spec.requestedViewInstanceId,
         webView: wv
       )
@@ -651,6 +657,7 @@ final class IosGroupWebViewPool {
       return
     }
     entry.touch()
+    IosProfileStoreManager.shared.flushCookiesThrottled(uuid: entry.uuid, minInterval: 4.0)
     if !entry.isBorrowedByForeground && entry.webView.superview == nil {
       parkInBackground(entry)
     }
@@ -700,26 +707,39 @@ final class IosGroupWebViewPool {
       return false
     }
     entry.touch()
-    entry.webView.reload()
+    IosProfileStoreManager.shared.rehydrateCookiesIntoMemoryStore(uuid: entry.uuid) { [weak entry] in
+      entry?.webView.reload()
+    }
     return true
   }
 
-  private func buildConfiguredWebView(
-    dataStore: WKWebsiteDataStore,
+  func refreshUserScriptsForUuid(_ uuid: String) {
+    let norm = uuid.lowercased()
+    for entry in entries.values where entry.uuid == norm && !entry.processTerminated {
+      installUserScripts(
+        on: entry.webView.configuration.userContentController,
+        uuid: entry.uuid,
+        timezoneInitScript: entry.timezoneInitScript,
+        backgroundRafJs: cachedRafJs,
+        netHookJs: cachedNetHookJs,
+        registerMessageHandler: false
+      )
+    }
+  }
+
+  private func installUserScripts(
+    on ucc: WKUserContentController,
     uuid: String,
     timezoneInitScript: String?,
     backgroundRafJs: String,
-    netHookJs: String
-  ) -> WKWebView {
-    let config = WKWebViewConfiguration()
-    config.websiteDataStore = dataStore
-    config.allowsInlineMediaPlayback = true
-    config.preferences.javaScriptCanOpenWindowsAutomatically = true
-    config.defaultWebpagePreferences.allowsContentJavaScript = true
-
-    let ucc = config.userContentController
+    netHookJs: String,
+    registerMessageHandler: Bool
+  ) {
+    ucc.removeAllUserScripts()
     if let lsScript = IosProfileStoreManager.shared.localStorageInitScript(for: uuid) {
-      ucc.add(LocalStorageSyncScriptHandler(), name: LocalStorageSyncScriptHandler.handlerName)
+      if registerMessageHandler {
+        ucc.add(LocalStorageSyncScriptHandler(), name: LocalStorageSyncScriptHandler.handlerName)
+      }
       ucc.addUserScript(
         WKUserScript(source: lsScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
       )
@@ -755,6 +775,29 @@ final class IosGroupWebViewPool {
         WKUserScript(source: tzScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
       )
     }
+  }
+
+  private func buildConfiguredWebView(
+    dataStore: WKWebsiteDataStore,
+    uuid: String,
+    timezoneInitScript: String?,
+    backgroundRafJs: String,
+    netHookJs: String
+  ) -> WKWebView {
+    let config = WKWebViewConfiguration()
+    config.websiteDataStore = dataStore
+    config.allowsInlineMediaPlayback = true
+    config.preferences.javaScriptCanOpenWindowsAutomatically = true
+    config.defaultWebpagePreferences.allowsContentJavaScript = true
+
+    installUserScripts(
+      on: config.userContentController,
+      uuid: uuid,
+      timezoneInitScript: timezoneInitScript,
+      backgroundRafJs: backgroundRafJs,
+      netHookJs: netHookJs,
+      registerMessageHandler: true
+    )
 
     let wv = WKWebView(frame: backgroundViewport, configuration: config)
     wv.allowsBackForwardNavigationGestures = true

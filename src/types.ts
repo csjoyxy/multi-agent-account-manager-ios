@@ -19,10 +19,20 @@ export interface ProviderInfo {
   verifiedMethods: string[];
 }
 
+export interface WebDavConfig {
+  url: string;
+  username: string;
+  password: string;
+  filename: string;
+}
+
 export interface AppSettings {
   minimizeToTray: boolean;
   globalShortcut: string;
   autoApprove: boolean;
+  isolateSameProxyKeepAlive: boolean;
+  silentSyncIntervalMins: number;
+  webdav?: WebDavConfig;
 }
 
 export interface ProxyTestResult {
@@ -191,6 +201,7 @@ export interface ManagerSnapshot {
   activeGroupId: string | null;
   externalAgents: ExternalAgentRecord[];
   accountErrors?: AccountPageError[];
+  officialRelayUrl?: string | null;
 }
 
 export interface UpdateCheckResult {
@@ -224,4 +235,59 @@ export interface DownloadNoticeEvent {
   filename: string;
   status: "started" | "completed" | "failed";
   error?: string | null;
+}
+
+export interface ExportSyncBundleResponse {
+  filename: string;
+  savedPath: string | null;
+  downloadId: number | null;
+  bundleJson: string;
+  accountCount: number;
+  cookieAccountCount: number;
+}
+
+export interface SyncImportSummary {
+  addedAccounts: number;
+  updatedAccounts: number;
+  importedCookieAccounts: number;
+  skippedCookieAccounts: number;
+  mergedGroups: number;
+  mergedExternalAgents: number;
+}
+
+export interface ImportSyncBundleResponse {
+  snapshot: ManagerSnapshot;
+  summary: SyncImportSummary;
+}
+
+export interface LanSyncShareInfo {
+  mode?: "lan" | "relay";
+  relayUrl?: string | null;
+  address: string;
+  passphrase: string;
+  syncUri: string;
+  qrSvg: string;
+  expiresAtMs: number;
+  maxDownloads: number;
+  accountCount: number;
+  cookieAccountCount: number;
+}
+
+export interface ScanQrResult {
+  content: string;
+  cancelled: boolean;
+}
+
+export interface WebDavTestResult {
+  ok: boolean;
+  remoteUrl: string;
+  fileExists: boolean;
+  message: string;
+}
+
+export interface WebDavPushResult {
+  remoteUrl: string;
+  accountCount: number;
+  cookieAccountCount: number;
+  sizeBytes: number;
 }

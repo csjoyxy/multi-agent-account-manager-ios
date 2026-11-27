@@ -1,3 +1,4 @@
+// Created by csjoyxy in 2026 for iOS 16.0+ multi-profile persistence in https://github.com/csjoyxy/multi-agent-account-manager-ios (Apache-2.0, derived from https://github.com/ldjx7/multi-agent-account-manager).
 import Foundation
 import Network
 import UIKit
@@ -13,6 +14,7 @@ private struct PersistedCookieRecord: Codable {
   let expiresAt: Double?
   let sameSite: String?
   let version: Int
+  let isHostOnly: Bool?
 }
 
 private final class CookieStoreObserverBox: NSObject, WKHTTPCookieStoreObserver {
@@ -46,10 +48,13 @@ final class IosProfileStoreManager {
   static let shared = IosProfileStoreManager()
 
   private var nonPersistentStores: [String: WKWebsiteDataStore] = [:]
+  private var hydratedUuids: Set<String> = []
+  private var pendingStoreWaiters: [String: [(WKWebsiteDataStore) -> Void]] = [:]
   private var cookieObservers: [String: CookieStoreObserverBox] = [:]
   private var pendingPersistWorkItems: [String: DispatchWorkItem] = [:]
+  private var lastThrottledFlushAt: [String: TimeInterval] = [:]
   private var localStorageCache: [String: [String: [String: String]]] = [:]
-  private let ioQueue = DispatchQueue(label: "com.ldjx.accountmanager.ios-profile-io", qos: .utility)
+  private let ioQueue = DispatchQueue(label: "com.ldjx.accountmanager.ios-profile-io", qos: .userInitiated)
 
   private init() {
     let center = NotificationCenter.default
@@ -68,12 +73,44 @@ final class IosProfileStoreManager {
   }
 
   @objc private func handleAppLifecycleFlush() {
+    if #available(iOS 17.0, *) {
+      return
+    }
+    let app = UIApplication.shared
+    var bgTask: UIBackgroundTaskIdentifier = .invalid
+    bgTask = app.beginBackgroundTask(withName: "maam-ios16-profile-flush") {
+      if bgTask != .invalid {
+        app.endBackgroundTask(bgTask)
+        bgTask = .invalid
+      }
+    }
+
     DispatchQueue.main.async {
-      if #available(iOS 17.0, *) {
+      let activePairs = self.nonPersistentStores.filter { self.hydratedUuids.contains($0.key) }
+      guard !activePairs.isEmpty else {
+        if bgTask != .invalid {
+          app.endBackgroundTask(bgTask)
+          bgTask = .invalid
+        }
         return
       }
-      for (uuid, store) in self.nonPersistentStores {
-        self.flushCookiesNow(uuid: uuid, store: store.httpCookieStore)
+      let group = DispatchGroup()
+      for (uuid, store) in activePairs {
+        self.pendingPersistWorkItems.removeValue(forKey: uuid)?.cancel()
+        group.enter()
+        self.flushCookiesNow(
+          uuid: uuid,
+          store: store.httpCookieStore,
+          allowEmptyOverwrite: false
+        ) {
+          group.leave()
+        }
+      }
+      group.notify(queue: .main) {
+        if bgTask != .invalid {
+          app.endBackgroundTask(bgTask)
+          bgTask = .invalid
+        }
       }
     }
   }
@@ -111,7 +148,7 @@ final class IosProfileStoreManager {
         return
       }
 
-      let inMemoryKeys = Set(self.nonPersistentStores.keys)
+      let inMemoryKeys = Set(self.nonPersistentStores.keys).union(self.pendingStoreWaiters.keys)
       let root = self.profilesRootUrl()
       self.ioQueue.async {
         var found = inMemoryKeys
@@ -157,7 +194,7 @@ final class IosProfileStoreManager {
       }
 
       let norm = uuid.uuidString.lowercased()
-      if let existing = self.nonPersistentStores[norm] {
+      if let existing = self.nonPersistentStores[norm], self.hydratedUuids.contains(norm) {
         if createMarkerIfNeeded {
           self.ioQueue.async { self.ensureProfileMarkerSync(uuid: norm) }
         }
@@ -165,7 +202,16 @@ final class IosProfileStoreManager {
         return
       }
 
-      let store = WKWebsiteDataStore.nonPersistent()
+      if self.pendingStoreWaiters[norm] != nil {
+        self.pendingStoreWaiters[norm]?.append(completion)
+        if createMarkerIfNeeded {
+          self.ioQueue.async { self.ensureProfileMarkerSync(uuid: norm) }
+        }
+        return
+      }
+
+      self.pendingStoreWaiters[norm] = [completion]
+      let store = self.nonPersistentStores[norm] ?? WKWebsiteDataStore.nonPersistent()
       self.nonPersistentStores[norm] = store
 
       let dir = self.profileDirUrl(for: norm)
@@ -200,8 +246,21 @@ final class IosProfileStoreManager {
         }
 
         DispatchQueue.main.async {
-          if self.localStorageCache[norm] == nil && !loadedLocalStorage.isEmpty {
-            self.localStorageCache[norm] = loadedLocalStorage
+          guard self.nonPersistentStores[norm] === store else {
+            let waiters = self.pendingStoreWaiters.removeValue(forKey: norm) ?? []
+            for cb in waiters {
+              cb(store)
+            }
+            return
+          }
+          if !loadedLocalStorage.isEmpty {
+            var merged = loadedLocalStorage
+            if let existingLs = self.localStorageCache[norm] {
+              for (origin, entries) in existingLs where !entries.isEmpty {
+                merged[origin] = entries
+              }
+            }
+            self.localStorageCache[norm] = merged
           }
           let group = DispatchGroup()
           for cookie in restoredCookies {
@@ -211,8 +270,63 @@ final class IosProfileStoreManager {
             }
           }
           group.notify(queue: .main) {
-            self.attachCookieObserverIfNeeded(uuid: norm, store: store)
-            completion(store)
+            if self.nonPersistentStores[norm] === store {
+              self.hydratedUuids.insert(norm)
+              self.attachCookieObserverIfNeeded(uuid: norm, store: store)
+            }
+            let waiters = self.pendingStoreWaiters.removeValue(forKey: norm) ?? []
+            for cb in waiters {
+              cb(store)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  func rehydrateCookiesIntoMemoryStore(uuid: String, completion: @escaping () -> Void) {
+    if #available(iOS 17.0, *) {
+      completion()
+      return
+    }
+    let norm = uuid.lowercased()
+    DispatchQueue.main.async {
+      guard let store = self.nonPersistentStores[norm] else {
+        completion()
+        return
+      }
+      let cookiesUrl = self.profileDirUrl(for: norm).appendingPathComponent("cookies.json")
+      self.ioQueue.async {
+        var loadedRecords: [PersistedCookieRecord] = []
+        if let data = try? Data(contentsOf: cookiesUrl),
+           let decoded = try? JSONDecoder().decode([PersistedCookieRecord].self, from: data) {
+          loadedRecords = decoded
+        }
+        let nowTs = Date().timeIntervalSince1970
+        var restored: [HTTPCookie] = []
+        for rec in loadedRecords {
+          if let exp = rec.expiresAt, exp <= nowTs {
+            continue
+          }
+          if let ck = Self.makeHttpCookie(from: rec) {
+            restored.append(ck)
+          }
+        }
+        DispatchQueue.main.async {
+          guard !restored.isEmpty, self.nonPersistentStores[norm] === store else {
+            completion()
+            return
+          }
+          let group = DispatchGroup()
+          for ck in restored {
+            group.enter()
+            store.httpCookieStore.setCookie(ck) {
+              group.leave()
+            }
+          }
+          group.notify(queue: .main) {
+            self.hydratedUuids.insert(norm)
+            completion()
           }
         }
       }
@@ -238,9 +352,16 @@ final class IosProfileStoreManager {
       }
       group.notify(queue: .main) {
         if #unavailable(iOS 17.0) {
-          self.flushCookiesNow(uuid: uuid.uuidString.lowercased(), store: store.httpCookieStore)
+          self.flushCookiesNow(
+            uuid: uuid.uuidString.lowercased(),
+            store: store.httpCookieStore,
+            allowEmptyOverwrite: false
+          ) {
+            completion()
+          }
+        } else {
+          completion()
         }
-        completion()
       }
     }
   }
@@ -262,6 +383,9 @@ final class IosProfileStoreManager {
 
       let norm = uuid.uuidString.lowercased()
       self.pendingPersistWorkItems.removeValue(forKey: norm)?.cancel()
+      self.pendingStoreWaiters.removeValue(forKey: norm)
+      self.hydratedUuids.remove(norm)
+      self.lastThrottledFlushAt.removeValue(forKey: norm)
       let obs = self.cookieObservers.removeValue(forKey: norm)
       let store = self.nonPersistentStores.removeValue(forKey: norm)
       self.localStorageCache.removeValue(forKey: norm)
@@ -327,28 +451,48 @@ final class IosProfileStoreManager {
         if (window.__maamLsSyncInstalled) return;
         window.__maamLsSyncInstalled = true;
         let timer = null;
-        const postSnapshot = () => {
+        let explicitlyRemovedOrCleared = false;
+        let lastDigest = '';
+        const collectEntries = () => {
+          const entries = {};
+          let totalChars = 0;
+          const parts = [];
+          const len = window.localStorage.length;
+          for (let i = 0; i < len && i < 250; i++) {
+            const key = window.localStorage.key(i);
+            if (!key) continue;
+            const val = window.localStorage.getItem(key);
+            if (typeof val !== 'string') continue;
+            if (totalChars + key.length + val.length > 786432) break;
+            totalChars += key.length + val.length;
+            entries[key] = val;
+            parts.push(key + '=' + val.length + ':' + val.slice(0, 24) + val.slice(-16));
+          }
+          parts.sort();
+          return { entries, digest: parts.join('|') };
+        };
+        try {
+          lastDigest = collectEntries().digest;
+        } catch (_) {}
+        const postSnapshot = (force) => {
           timer = null;
           try {
             const bridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(LocalStorageSyncScriptHandler.handlerName);
             if (!bridge || typeof bridge.postMessage !== 'function') return;
-            const entries = {};
-            let totalChars = 0;
-            for (let i = 0; i < window.localStorage.length && i < 200; i++) {
-              const key = window.localStorage.key(i);
-              if (!key) continue;
-              const val = window.localStorage.getItem(key);
-              if (typeof val !== 'string') continue;
-              if (totalChars + key.length + val.length > 524288) break;
-              totalChars += key.length + val.length;
-              entries[key] = val;
-            }
-            bridge.postMessage({ uuid: PROFILE_UUID, origin, entries });
+            const { entries, digest } = collectEntries();
+            if (!force && digest === lastDigest) return;
+            lastDigest = digest;
+            bridge.postMessage({
+              uuid: PROFILE_UUID,
+              origin,
+              entries,
+              explicitClear: explicitlyRemovedOrCleared
+            });
           } catch (_) {}
         };
         const scheduleSync = () => {
           if (timer) return;
-          timer = setTimeout(postSnapshot, 280);
+          timer = setTimeout(() => postSnapshot(true), 220);
         };
         const origSet = Storage.prototype.setItem;
         const origRemove = Storage.prototype.removeItem;
@@ -360,15 +504,25 @@ final class IosProfileStoreManager {
         };
         Storage.prototype.removeItem = function(k) {
           const r = origRemove.apply(this, arguments);
-          if (this === window.localStorage) scheduleSync();
+          if (this === window.localStorage) {
+            explicitlyRemovedOrCleared = true;
+            scheduleSync();
+          }
           return r;
         };
         Storage.prototype.clear = function() {
           const r = origClear.apply(this, arguments);
-          if (this === window.localStorage) scheduleSync();
+          if (this === window.localStorage) {
+            explicitlyRemovedOrCleared = true;
+            scheduleSync();
+          }
           return r;
         };
-        window.addEventListener('pagehide', postSnapshot);
+        window.addEventListener('pagehide', () => postSnapshot(false));
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') postSnapshot(false);
+        });
+        setInterval(() => postSnapshot(false), 2500);
       } catch (_) {}
     })();
     """
@@ -385,6 +539,7 @@ final class IosProfileStoreManager {
           let rawEntries = dict["entries"] as? [String: Any] else {
       return
     }
+    let explicitClear = (dict["explicitClear"] as? Bool) ?? false
     let norm = rawUuid.lowercased()
     guard UUID(uuidString: norm) != nil else { return }
 
@@ -398,8 +553,15 @@ final class IosProfileStoreManager {
     DispatchQueue.main.async {
       guard self.nonPersistentStores[norm] != nil else { return }
       var perOrigin = self.localStorageCache[norm] ?? [:]
+      if cleanEntries.isEmpty && !explicitClear, let prev = perOrigin[origin], !prev.isEmpty {
+        return
+      }
+      if perOrigin[origin] == cleanEntries {
+        return
+      }
       perOrigin[origin] = cleanEntries
       self.localStorageCache[norm] = perOrigin
+      IosGroupWebViewPool.shared.refreshUserScriptsForUuid(norm)
       let snapshot = perOrigin
       let dir = self.profileDirUrl(for: norm)
       self.ioQueue.async {
@@ -421,15 +583,15 @@ final class IosProfileStoreManager {
 
   fileprivate func scheduleCookiePersist(uuid: String, store: WKHTTPCookieStore) {
     DispatchQueue.main.async {
-      guard self.nonPersistentStores[uuid] != nil else { return }
+      guard self.nonPersistentStores[uuid] != nil, self.hydratedUuids.contains(uuid) else { return }
       self.pendingPersistWorkItems[uuid]?.cancel()
       let item = DispatchWorkItem { [weak self, weak store] in
         guard let self = self, let store = store else { return }
         self.pendingPersistWorkItems.removeValue(forKey: uuid)
-        self.flushCookiesNow(uuid: uuid, store: store)
+        self.flushCookiesNow(uuid: uuid, store: store, allowEmptyOverwrite: false)
       }
       self.pendingPersistWorkItems[uuid] = item
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: item)
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
     }
   }
 
@@ -439,17 +601,50 @@ final class IosProfileStoreManager {
     }
     let norm = uuid.lowercased()
     DispatchQueue.main.async {
-      if let store = self.nonPersistentStores[norm] {
-        self.flushCookiesNow(uuid: norm, store: store.httpCookieStore)
+      if let store = self.nonPersistentStores[norm], self.hydratedUuids.contains(norm) {
+        self.lastThrottledFlushAt[norm] = Date().timeIntervalSince1970
+        self.flushCookiesNow(uuid: norm, store: store.httpCookieStore, allowEmptyOverwrite: false)
       }
     }
   }
 
-  private func flushCookiesNow(uuid: String, store: WKHTTPCookieStore) {
-    guard nonPersistentStores[uuid] != nil else { return }
+  func flushCookiesThrottled(uuid: String, minInterval: TimeInterval = 4.0) {
+    if #available(iOS 17.0, *) {
+      return
+    }
+    let norm = uuid.lowercased()
+    DispatchQueue.main.async {
+      guard let store = self.nonPersistentStores[norm], self.hydratedUuids.contains(norm) else {
+        return
+      }
+      let now = Date().timeIntervalSince1970
+      if let last = self.lastThrottledFlushAt[norm], now - last < minInterval {
+        return
+      }
+      self.lastThrottledFlushAt[norm] = now
+      self.flushCookiesNow(uuid: norm, store: store.httpCookieStore, allowEmptyOverwrite: false)
+    }
+  }
+
+  private func flushCookiesNow(
+    uuid: String,
+    store: WKHTTPCookieStore,
+    allowEmptyOverwrite: Bool,
+    completion: (() -> Void)? = nil
+  ) {
+    guard nonPersistentStores[uuid] != nil, hydratedUuids.contains(uuid) else {
+      completion?()
+      return
+    }
     store.getAllCookies { [weak self] cookies in
-      guard let self = self else { return }
-      guard self.nonPersistentStores[uuid] != nil else { return }
+      guard let self = self else {
+        completion?()
+        return
+      }
+      guard self.nonPersistentStores[uuid] != nil, self.hydratedUuids.contains(uuid) else {
+        completion?()
+        return
+      }
       let now = Date()
       var records: [PersistedCookieRecord] = []
       records.reserveCapacity(cookies.count)
@@ -467,7 +662,8 @@ final class IosProfileStoreManager {
             isHTTPOnly: c.isHTTPOnly,
             expiresAt: c.expiresDate?.timeIntervalSince1970,
             sameSite: c.sameSitePolicy?.rawValue,
-            version: c.version
+            version: c.version,
+            isHostOnly: !c.domain.hasPrefix(".")
           )
         )
       }
@@ -475,22 +671,61 @@ final class IosProfileStoreManager {
       self.ioQueue.async {
         self.ensureProfileMarkerSync(uuid: uuid)
         let cookiesUrl = dir.appendingPathComponent("cookies.json")
+        if records.isEmpty && !allowEmptyOverwrite {
+          if let existingData = try? Data(contentsOf: cookiesUrl),
+             let existingRecords = try? JSONDecoder().decode([PersistedCookieRecord].self, from: existingData) {
+            let nowTs = Date().timeIntervalSince1970
+            let hasValidSaved = existingRecords.contains { rec in
+              if let exp = rec.expiresAt {
+                return exp > nowTs
+              }
+              return true
+            }
+            if hasValidSaved {
+              DispatchQueue.main.async {
+                self.rehydrateCookiesIntoMemoryStore(uuid: uuid) {
+                  completion?()
+                }
+              }
+              return
+            }
+          }
+        }
         if let data = try? JSONEncoder().encode(records) {
           try? data.write(to: cookiesUrl, options: .atomic)
+        }
+        if let completion = completion {
+          DispatchQueue.main.async {
+            completion()
+          }
         }
       }
     }
   }
 
   private static func makeHttpCookie(from rec: PersistedCookieRecord) -> HTTPCookie? {
+    let rawDomain = rec.domain.trimmingCharacters(in: .whitespacesAndNewlines)
+    let cleanHost = rawDomain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+    guard !cleanHost.isEmpty else { return nil }
+    let cleanPath = rec.path.isEmpty ? "/" : rec.path
+    let isHostPrefix = rec.name.hasPrefix("__Host-")
+    let hostOnly = isHostPrefix || (rec.isHostOnly == true && !rawDomain.hasPrefix("."))
+
     var props: [HTTPCookiePropertyKey: Any] = [
       .name: rec.name,
       .value: rec.value,
-      .domain: rec.domain,
-      .path: rec.path.isEmpty ? "/" : rec.path,
+      .path: isHostPrefix ? "/" : cleanPath,
       .version: String(rec.version),
     ]
-    if rec.isSecure {
+    if let originUrl = URL(string: "https://\(cleanHost)\(isHostPrefix ? "/" : cleanPath)") {
+      props[.originURL] = originUrl
+    }
+    if !isHostPrefix {
+      props[.domain] = hostOnly ? cleanHost : rawDomain
+    } else {
+      props[.domain] = cleanHost
+    }
+    if rec.isSecure || isHostPrefix || rec.name.hasPrefix("__Secure-") {
       props[.secure] = "TRUE"
     }
     if rec.isHTTPOnly {
@@ -502,6 +737,10 @@ final class IosProfileStoreManager {
     if let ss = rec.sameSite, !ss.isEmpty {
       props[.sameSitePolicy] = HTTPCookieStringPolicy(rawValue: ss)
     }
+    if let cookie = HTTPCookie(properties: props) {
+      return cookie
+    }
+    props[.domain] = cleanHost
     return HTTPCookie(properties: props)
   }
 

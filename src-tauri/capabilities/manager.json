@@ -46,6 +46,16 @@
     "allow-reset-site-adapter-overrides",
     "allow-check-for-updates",
     "allow-download-and-install-update",
-    "allow-open-external-url"
+    "allow-open-external-url",
+    "allow-export-sync-bundle",
+    "allow-import-sync-bundle",
+    "allow-start-lan-sync-share",
+    "allow-start-relay-sync-share",
+    "allow-stop-lan-sync-share",
+    "allow-pull-lan-sync-share",
+    "allow-scan-sync-qr-code",
+    "allow-test-webdav-sync",
+    "allow-push-webdav-sync",
+    "allow-pull-webdav-sync"
   ]
 }

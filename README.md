@@ -6,7 +6,7 @@
 
 > **开源来源与致谢声明（Attribution）**
 > 本仓库基于原作者 **[@ldjx7](https://github.com/ldjx7)** 开源的 **[ldjx7/multi-agent-account-manager](https://github.com/ldjx7/multi-agent-account-manager)**（遵循 [Apache-2.0](LICENSE) 协议）衍生修改，完整保留上游提交历史与版权声明（详见 [NOTICE](NOTICE)）。
-> 本衍生版重点新增了 **iOS 16.0+（含 iOS 16.4.1）多账号隔离持久化** 与 **iOS 端多账号群聊协作** 支持；iOS 16 兼容与衍生构建相关问题请在本仓库反馈，请勿打扰上游原作者。
+> 本衍生版已同步上游 **v0.2.4** 特性，并重点新增了 **iOS 16.0+（含 iOS 16.4.1）多账号隔离持久化与防掉登录优化** 及 **iOS 端多账号群聊协作** 支持；iOS 16 兼容与衍生构建相关问题请在本仓库反馈，请勿打扰上游原作者。
 
 基于 Tauri 2 构建的跨平台（macOS / Windows / iOS / Android）AI 助手多账号隔离与快速切换工具，安装后应用名称为 **叠号**。
 
@@ -20,16 +20,24 @@
 
 - **原生级多账号隔离**：
   - macOS 使用独立 UUID `WKWebsiteDataStore`，Windows 使用独立 WebView2 `UserDataFolder`，Android 使用独立 WebView `MULTI_PROFILE`。
-  - **iOS 双引擎兼容（iOS 16.0+，完美支持 iOS 16.4.1）**：iOS 17+ 原生调用 `WKWebsiteDataStore(forIdentifier:)`；iOS 16.0–16.7 自动启用按账号 UUID 隔离的内存 `WKWebsiteDataStore.nonPersistent()` 容器，并将 Cookie（含 `HttpOnly` 与会话级 Cookie）及各源 `localStorage` 持久化至应用沙盒 `Application Support/.../ios-profiles/<uuid>/`，重启应用后完整保留多账号登录态且互不串号。
+  - **iOS 双引擎兼容（iOS 16.0+，完美支持 iOS 16.4.1）**：iOS 17+ 原生调用 `WKWebsiteDataStore(forIdentifier:)`；iOS 16.0–16.7 自动启用按账号 UUID 隔离的内存 `WKWebsiteDataStore.nonPersistent()` 容器，并将 Cookie（含 `HttpOnly`、`__Host-*` 与会话级 Cookie）及各源 `localStorage` 持久化至应用沙盒 `Application Support/.../ios-profiles/<uuid>/`，重启应用或后台切回均完整保留多账号登录态且互不串号。
 - **多账号群聊协作（桌面端 & iOS 端）**：
   - 支持创建/编辑/删除群聊，接入 Muse、Hark 网页账号与外部 OpenAI 兼容 API（桌面端另支持本地 CLI Agent）同群协作；iPhone 采用「群列表 ↔ 聊天室」单栏导航，iPad 自动启用双栏分屏视图。
   - iOS 端内置后台保活 `WKWebView` 池（`IosGroupWebViewPool`），支持后台并发流式生成回复、内存告警自动回收，以及从群聊「前往该账号授权」时零重载无缝复用实时 DOM 视图。
   - 支持 **并行讨论**、**评审流**、**A2A 接力** 三种协作模式，支持 `@成员`、`@渠道` 与 `@全体` 点名路由；按渠道自动选号时基于剩余额度智能选择并支持失败自动冷却切换。
   - 支持 **共享上下文 & 技能（Skills）**、**成员角色设定**、**沉淀本轮结论**、**新建话题**、**站点选择器适配器自定义覆盖** 等进阶编排能力。
+- **多端端到端加密同步（四端互通，含 iOS 16.0+）**：
+  - **局域网直传扫码**：自动过滤代理 TUN / 虚拟网卡并识别真实物理局域网 IP，使用 `AES-256-GCM` 端到端加密，3 分钟或最多 3 次拉取后自动关闭；iOS / Android 支持原生相机扫码一键拉取合并，无需手动复制。
+  - **可选 Cloudflare 零知识加密中转通道（默认关闭）**：跨网或开启代理不便局域网直连时可手动开启（默认接入 `https://sync.ldjx7.qzz.io`，也可自建 [`relay-worker/`](relay-worker)）；每次传输本地随机生成一次性 256-bit 密钥且仅含于二维码/同步串中，不收集用户数据，服务端仅暂存密文、无法解密，3 分钟或拉取完成后立即销毁。
+  - **WebDAV 端到端加密云同步**：支持坚果云、Nextcloud、AList / OpenList、NAS 等标准 WebDAV 服务（公网强制 HTTPS，局域网内网支持 HTTP）；本地使用 `AES-256-GCM` 端到端加密后上传，加密口令不保存也不上传，支持连接测试与增量拉取合并。
+  - **`.maam` 加密备份文件与按需选号同步**：支持按需勾选账号导出/导入配置、代理、时区、群聊及隔离容器 Cookie 登录态（iOS 16.0+ 同样完整支持导出与导入 Cookie）；落盘采用只增不删的增量合并，保留本地已有数据。
 - **Cookie 导入登录与邮箱识别（全平台）**：
   - 在「新增账号」弹窗或「账号设置」弹窗中粘贴 **JSON 数组**、**Netscape `cookies.txt`** 或 **HTTP `Cookie:` 请求头** 即可导入对应账号的独立隔离容器（macOS / Windows / iOS / Android 均支持）。
   - 创建时导入会在打开页面前校验并写入 Cookie，直接进入已登录状态。
   - 自动从 Cookie、页面数据及 Meta 账户中心（`accountscenter.meta.com`）提取真实邮箱；若导入的 Cookie 未包含 `.meta.com` 凭据且无法读取邮箱，账号将标记为「已登录账号」并在下方展示 **「未获取到邮箱 · 手动改名」** 快捷按钮。
+- **同代理防限流保活与检测频控（桌面端可配置）**：
+  - 支持在 **设置** 中开启「同代理仅保活当前账号」（默认开启）：未配独立代理或共用同一代理的同平台账号仅保持当前活跃窗口，切号自动释放旧窗口；关闭即可恢复全量后台预热保活。
+  - 支持自定义「后台静默保活 / 额度检测间隔」（默认 15 分钟，支持 `0–120` 分钟，设为 `0` 仅手动刷新）；手动刷新多个独立代理账号时自动间隔 1.2 秒错峰请求。
 - **工具权限自动审批（桌面端 & iOS 端）**：
   - 在 **设置** 中开启「自动审批权限请求」后，当前打开的账号页与群聊后台保活账号会自动识别授权卡片/弹窗，优先点击单次授权按钮（「允许一次」「允许」「批准」等），并严格拦截删除、注销、退出登录、支付、改密等高危操作。
 - **登录态校验与状态异常恢复**：
@@ -55,6 +63,76 @@
    - **同时导入 `muse.ai` + `meta.com` 的 Cookie（推荐）**：不仅能正常使用 Muse，应用还会**自动从 Meta 账户中心（`accountscenter.meta.com`）识别并更新真实邮箱**，点开「Meta 账户」也会保持已登录状态。
 2. **多域名 Cookie 导出方法**：推荐使用 Chrome 插件 **Get cookies.txt LOCALLY**，点击 **Export All Cookies**（或在 `muse.ai` 与 `accountscenter.meta.com` 页面分别点右上角 **Copy** 后上下拼接）得到 Netscape `cookies.txt` 或 JSON 数组后直接粘贴；应用会自动过滤，只导入当前服务允许域名（`.muse.ai`、`.meta.com` 等）的 Cookie，无需担心混入其他网站。
 3. **导入操作入口**：点击服务栏右上角 **「+ 新增」**，在 **「导入 Cookie（可选）」** 中粘贴后点击 **「创建并打开」** 即可直接进入已登录状态；也可在已有账号的 **「账号设置（编辑图标）」** 中粘贴并点击 **「导入 Cookie」** 覆盖更新。
+
+### 3. 多端加密同步（桌面端 ↔ iOS / Android）
+
+1. **局域网直传扫码（默认）**：
+   - 发送端点击 **「同步」→「开启共享」**，会跳过本机代理 TUN/虚拟网卡并自动选择真实物理局域网 IP，生成包含口令的二维码（3 分钟或最多 3 次拉取后自动关闭）。
+   - iOS / Android 端在同局域网下点击 **「扫码直接同步」** 即可完成识别、拉取、解密与增量合并；桌面端也可直接粘贴 `maam-sync://...` 同步串拉取。
+2. **官网 / Cloudflare 加密中转通道（默认关闭，按需开启）**：
+   - 跨网络或代理限制局域网直连时，可在发送端手动勾选 **「启用官网 / Cloudflare 加密中转通道」**（内置默认通道 `https://sync.ldjx7.qzz.io`，也可填写自建 Worker 地址）。
+   - 每次同步均在本地随机生成一次性 256-bit 密钥做 `AES-256-GCM` 端到端加密，密钥仅包含在二维码/同步串 `#` 片段中且绝不上传服务端；中转服务端不收集用户数据、无法解密密文，到达有效期（3 分钟）或拉取上限后自动彻底销毁。
+   - 如需自建中转服务，可在 `relay-worker/` 目录执行 `npx wrangler deploy` 部署 Cloudflare Workers + Durable Objects 实例。
+3. **WebDAV 云同步**：
+   - 切换至 **「WebDAV 云同步」** 标签页，填写 WebDAV 地址（如坚果云建议指定子目录 `https://dav.jianguoyun.com/dav/diehao/`）、用户名与应用密码，可先点击 **「测试连接」** 校验目录与权限。
+   - 输入至少 4 位端到端加密口令（两端需一致，本地不持久化保存且不上传），点击 **「加密上传到 WebDAV」** 备份密文，或在目标设备点击 **「从 WebDAV 拉取并合并」** 完成增量同步。
+4. **`.maam` 加密备份文件**：
+   - 切换至 **「加密备份文件」** 标签页，设置口令即可导出/导入 `.maam` 加密包。合并时按账号、群聊、外部 Agent 增量写入，不会删除接收端原有数据。
+
+### 4. 同代理保活与频率设置（桌面端）
+
+1. 点击左下角 **「设置」**，可按需配置 **「同代理仅保活当前账号（防多号同 IP 限流）」**（默认开启）与 **「后台静默保活 / 额度检测间隔（分钟）」**（默认 15 分钟，支持 `5 / 15 / 30 / 仅手动(0)`）。
+2. 当多个 Muse 账号共用同一代理或均走系统默认代理时，保持默认开启可避免多实例并发请求触发 IP 频控；若已为各账号分别配置独立出口代理，可关闭隔离开关以恢复全部后台预热。
+3. iOS / Android 移动端每次仅单开当前账号会话，返回即关闭，无后台保活与定时轮询，无需额外配置。
+
+### 5. 为每个账号单独配置代理（以 Windows Clash Verge 为例）
+
+1. **添加全局扩展脚本**：打开 **Clash Verge**，进入左侧 **「订阅」** 页面，找到 **「全局扩展脚本」**，右键选择 **「编辑文件」**，写入以下脚本：
+
+   <p align="center">
+     <img src="docs/screenshots/clash-verge-script.jpg" alt="Clash Verge 全局扩展脚本右键编辑" width="76%" />
+   </p>
+
+   ```js
+   function main(config) {
+     const count = 5;          // 代理数量可自行更改
+     const startPort = 17891;  // 起始端口号可自行更改
+     const allNames = (config.proxies || []).map(p => p.name);
+
+     const accGroups = [];
+     const accListeners = [];
+     for (let i = 1; i <= count; i++) {
+       const name = `账号${i}出口`;
+       accGroups.push({ name, type: "select", proxies: [...allNames] });
+       accListeners.push({
+         name: `acc${i}`,
+         type: "http",
+         port: startPort + i - 1,
+         listen: "127.0.0.1",
+         proxy: name,
+       });
+     }
+
+     config["proxy-groups"] = [...accGroups, ...(config["proxy-groups"] || [])];
+     config.listeners = [...(config.listeners || []), ...accListeners];
+     return config;
+   }
+   ```
+
+2. **为每个出口分组选择节点**：保存并启用脚本后，在 Clash Verge 左侧 **「代理」** 页面会出现 `账号1出口`、`账号2出口` 等策略组，分别为每个分组选择不同的代理节点。
+
+   <p align="center">
+     <img src="docs/screenshots/clash-verge-groups.jpg" alt="Clash Verge 为每个账号策略组选择不同节点" width="76%" />
+   </p>
+3. **在叠号中绑定端口并测试**：打开叠号对应账号的 **「账号设置」**，在 **「HTTP CONNECT 代理」** 中填入对应本地代理地址（如 `http://127.0.0.1:17891` ～ `http://127.0.0.1:17895`，每个端口对应一个出口节点），点击 **「测试连接」** 显示成功即可；也可按需在下方搭配 **「自定义时区」**。
+
+> **平台补充说明**：Android 由于系统机制限制，暂不支持为每个账号单独配置代理；macOS / iOS 使用 Shadowrocket（小火箭）无法按端口分流，改用支持多 `listeners` 入站的 Clash 类客户端配置逻辑基本相同。
+
+<p align="center">
+  <img src="docs/screenshots/proxy-muse1.jpg" alt="Muse1 独立代理配置" width="240" />
+  <img src="docs/screenshots/proxy-muse2.jpg" alt="Muse2 独立代理配置" width="240" />
+  <img src="docs/screenshots/proxy-muse3.jpg" alt="Muse3 独立代理配置" width="240" />
+</p>
 
 ---
 
@@ -99,7 +177,7 @@
 
 | 平台 | 下载文件 | 架构 / 系统要求 |
 | --- | --- | --- |
-| **iOS / iPadOS** | `account-manager-ios-unsigned.ipa` | arm64（**iOS 16.0+**，原生兼容 iOS 16.4.1 / iOS 17+） |
+| **iOS / iPadOS** | `account-manager-ios-unsigned.ipa` | arm64 未签名安装包（**iOS 16.0+**，原生兼容 iOS 16.4.1 / iOS 17+） |
 | macOS | `account-manager-macos-universal.dmg` | Apple Silicon & Intel（macOS 14.0+） |
 | Windows | `account-manager-windows-x64-setup.exe` | x64（Windows 10 / 11） |
 | Android | `account-manager-android-universal-release.apk` | 通用 ABI（Android 7.0+） |
@@ -112,9 +190,10 @@
    - iOS 16.4.1 支持安装 TrollStore 2，下载无签名安装包 `account-manager-ios-unsigned.ipa` 后直接分享至 **TrollStore** 即可永久安装，无 7 天过期限制。
 2. **个人 Apple ID 自签侧载（AltStore / SideStore / Sideloadly / 爱思助手）**：
    - 若未使用 TrollStore，可将 `account-manager-ios-unsigned.ipa` 导入 **AltStore / SideStore / Sideloadly** 使用免费或付费 Apple ID 重签安装；首次打开若提示「不受信任的开发者」，前往「设置 → 通用 → VPN 与设备管理」信任对应开发者证书，并在 iOS 16+ 开启「设置 → 隐私与安全性 → 开发者模式」。
-3. **登录态与代理说明**：
+3. **登录态保留与权限说明**：
    - iOS 16.x 下各账号独立 Cookie 与 `localStorage` 保存在应用沙盒 `Library/Application Support/com.ldjx.accountmanager/ios-profiles/<uuid>/` 中，使用同一签名（或 TrollStore）覆盖安装升级时完整保留所有账号登录态与群聊记录。
    - 受系统 WebKit 接口限制，按账号独立 HTTP CONNECT 代理需 iOS 17.0+ 生效；iOS 16.x 系统会自动回退使用手机全局网络 / VPN 工具（如 Shadowrocket / Loon / Stash）。
+   - 使用局域网扫码直传同步功能时，请按系统弹窗授予「相机」与「本地网络」权限。
 
 ### macOS 安装注意事项
 
@@ -172,8 +251,8 @@
   2. 提交并推送 `v*` 标签（GitHub Actions 将自动编译 iOS / macOS / Windows / Android 四端安装包、生成 `latest.json` 并创建 Release）：
 
      ```bash
-     git tag v0.1.11
-     git push origin v0.1.11
+     git tag v0.2.4-ios.1
+     git push origin v0.2.4-ios.1
      ```
 
 ---
@@ -185,8 +264,11 @@
 ```bash
 npm ci
 npm run tauri -- dev
+npm run tauri -- build
 # macOS 下本地打包 iOS 16.0+ 无签名 IPA：
 bash scripts/build-ios-ipa.sh
+# 自建 Cloudflare 加密中转通道（可选）：
+cd relay-worker && npx wrangler deploy
 ```
 
 ---

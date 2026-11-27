@@ -58,7 +58,7 @@ text = re.sub(
     flags=re.MULTILINE,
 )
 
-for fw in ("CoreFoundation.framework", "Security.framework", "Network.framework"):
+for fw in ("CoreFoundation.framework", "Security.framework", "Network.framework", "AVFoundation.framework"):
     entry = f"      - sdk: {fw}\n"
     if entry not in text:
         anchor = "      - sdk: WebKit.framework\n"
@@ -70,6 +70,24 @@ if "        CFBundleDisplayName:" not in text:
     text = text.replace(
         "        LSRequiresIPhoneOS: true\n",
         "        CFBundleDisplayName: 叠号\n        LSRequiresIPhoneOS: true\n",
+        1,
+    )
+if "        NSLocalNetworkUsageDescription:" not in text:
+    text = text.replace(
+        "        LSRequiresIPhoneOS: true\n",
+        "        LSRequiresIPhoneOS: true\n        NSLocalNetworkUsageDescription: 用于局域网多端加密同步账号与登录态\n",
+        1,
+    )
+if "        NSCameraUsageDescription:" not in text:
+    text = text.replace(
+        "        NSLocalNetworkUsageDescription: 用于局域网多端加密同步账号与登录态\n",
+        "        NSLocalNetworkUsageDescription: 用于局域网多端加密同步账号与登录态\n        NSCameraUsageDescription: 用于扫描局域网同步二维码，快速导入账号与登录态\n",
+        1,
+    )
+if "        NSAppTransportSecurity:" not in text:
+    text = text.replace(
+        "        LSRequiresIPhoneOS: true\n",
+        "        LSRequiresIPhoneOS: true\n        NSAppTransportSecurity:\n          NSAllowsLocalNetworking: true\n",
         1,
     )
 

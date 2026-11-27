@@ -8,21 +8,28 @@ import type {
   DownloadNoticeEvent,
   ExternalAgentKind,
   ExternalAgentRecord,
+  ExportSyncBundleResponse,
   GroupChatMessage,
   GroupChatRecord,
   GroupMemberRole,
   GroupSharedSkill,
   GroupWorkflowMode,
+  ImportSyncBundleResponse,
   InstallUpdateOutcome,
+  LanSyncShareInfo,
   ManagerSnapshot,
   ProviderId,
   ProviderInfo,
   ProxyTestResult,
   QuotaDetail,
+  ScanQrResult,
   SiteAdaptersSnapshot,
+  SyncImportSummary,
   ThemeMode,
   UpdateCheckResult,
   UpdateProgressEvent,
+  WebDavPushResult,
+  WebDavTestResult,
 } from "./types";
 
 type AccountDraft = {
@@ -99,8 +106,45 @@ type ModalMode =
       minimizeToTray: boolean;
       globalShortcut: string;
       autoApprove: boolean;
+      isolateSameProxyKeepAlive: boolean;
+      silentSyncIntervalMins: number;
       error?: string;
       saving?: boolean;
+    }
+  | {
+      kind: "sync";
+      tab: "lan" | "webdav" | "file";
+      includeProxy: boolean;
+      selectedAccountKeys: string[];
+      accountPickerExpanded: boolean;
+      relayEnabled: boolean;
+      relayUrlDraft: string;
+      lanSharePassDraft: string;
+      lanShareInfo?: LanSyncShareInfo | null;
+      lanShareBusy?: boolean;
+      lanPullAddrDraft: string;
+      lanPullPassDraft: string;
+      lanPullBusy?: boolean;
+      lanScanBusy?: boolean;
+      webdavUrlDraft: string;
+      webdavUserDraft: string;
+      webdavPassDraft: string;
+      webdavFilenameDraft: string;
+      webdavSyncPassDraft: string;
+      webdavTestBusy?: boolean;
+      webdavPushBusy?: boolean;
+      webdavPullBusy?: boolean;
+      webdavHint?: string;
+      fileExportPassDraft: string;
+      fileExportResult?: ExportSyncBundleResponse | null;
+      fileExportBusy?: boolean;
+      fileImportJsonDraft: string;
+      fileImportFileName?: string;
+      fileImportPassDraft: string;
+      fileImportBusy?: boolean;
+      importSummary?: SyncImportSummary | null;
+      copyHint?: string;
+      error?: string;
     }
   | { kind: "update" };
 
@@ -199,6 +243,8 @@ const ICON_BOLT = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" s
 const ICON_SORT = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M6 12h12"/><path d="M10 18h4"/></svg>`;
 const ICON_GROUP = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h.01"/><path d="M12 10h.01"/><path d="M16 10h.01"/></svg>`;
 const ICON_PIN = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/><line x1="12" x2="12" y1="7" y2="13"/><line x1="15" x2="9" y1="10" y2="10"/></svg>`;
+const ICON_SYNC = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`;
+const ICON_QR_SCAN = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" x2="17" y1="12" y2="12"/></svg>`;
 const syncingMsgIds = new Set<string>();
 
 const THEME_STORAGE_KEY = "maam_theme_mode";
@@ -1086,6 +1132,9 @@ async function runDownloadAndInstall(): Promise<void> {
 }
 
 async function setModal(next: ModalMode): Promise<void> {
+  if (modal.kind === "sync" && next.kind !== "sync" && modal.lanShareInfo) {
+    void invoke("stop_lan_sync_share").catch(() => {});
+  }
   const prevKind = modal.kind;
   const wasActive = prevKind !== "none";
   const isActive = next.kind !== "none";
@@ -1322,6 +1371,216 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
   if (modal.kind === "update") {
     return renderUpdateModal();
   }
+  if (modal.kind === "sync") {
+    const busyAny = Boolean(
+      modal.lanShareBusy ||
+        modal.lanPullBusy ||
+        modal.lanScanBusy ||
+        modal.webdavTestBusy ||
+        modal.webdavPushBusy ||
+        modal.webdavPullBusy ||
+        modal.fileExportBusy ||
+        modal.fileImportBusy
+    );
+    const shareInfo = modal.lanShareInfo;
+    const isRelayActive = shareInfo?.mode === "relay";
+    const exportRes = modal.fileExportResult;
+    const summary = modal.importSummary;
+    const selectedKeySet = new Set(modal.selectedAccountKeys.map((k) => k.toLowerCase()));
+    const totalSyncAccounts = state.accounts.length;
+    const selectedSyncAccounts = state.accounts.filter((a) =>
+      selectedKeySet.has(`${a.providerId}:${a.uuid}`.toLowerCase())
+    ).length;
+    const syncAccountPickerHtml =
+      totalSyncAccounts > 0
+        ? `
+          <div class="sync-account-picker">
+            <div class="sync-account-picker-head">
+              <span id="sync-account-picker-count">同步 / 导出账号：${selectedSyncAccounts === totalSyncAccounts ? `全部 ${totalSyncAccounts} 个` : `已选 ${selectedSyncAccounts} / ${totalSyncAccounts} 个`}</span>
+              <button id="sync-account-picker-toggle" class="mini-btn" type="button" ${busyAny ? "disabled" : ""}>${modal.accountPickerExpanded ? "收起" : "选择账号"}</button>
+            </div>
+            ${
+              modal.accountPickerExpanded
+                ? `
+              <div class="sync-account-picker-actions">
+                <button id="sync-account-select-all" class="mini-btn" type="button" ${busyAny ? "disabled" : ""}>全选</button>
+                <button id="sync-account-select-none" class="mini-btn" type="button" ${busyAny ? "disabled" : ""}>清空</button>
+              </div>
+              <div class="sync-account-picker-list">
+                ${state.accounts
+                  .map((acc) => {
+                    const key = `${acc.providerId}:${acc.uuid}`;
+                    const checked = selectedKeySet.has(key.toLowerCase());
+                    const providerLabel = acc.providerId === "muse" ? "Muse" : acc.providerId === "hark" ? "Hark" : acc.providerId;
+                    const authLabel = acc.authState === "authenticated" ? "已登录" : "未登录";
+                    return `
+                      <label class="sync-account-pick-item">
+                        <input class="sync-account-pick-cb" type="checkbox" data-account-key="${escapeHtml(key)}" ${checked ? "checked" : ""} ${busyAny ? "disabled" : ""} />
+                        <span class="sync-account-pick-tag">${escapeHtml(providerLabel)}</span>
+                        <span class="sync-account-pick-name">${escapeHtml(acc.alias)}</span>
+                        <span class="sync-account-pick-auth ${acc.authState === "authenticated" ? "ok" : ""}">${authLabel}</span>
+                      </label>
+                    `;
+                  })
+                  .join("")}
+              </div>
+            `
+                : ""
+            }
+          </div>
+        `
+        : "";
+    const tabBody =
+      modal.tab === "lan"
+        ? `
+          <div class="sync-section">
+            <div class="sync-section-title">作为发送端（生成临时加密共享）</div>
+            <label class="sync-relay-toggle">
+              <input id="sync-relay-toggle" type="checkbox" ${modal.relayEnabled ? "checked" : ""} ${busyAny ? "disabled" : ""} />
+              <span>启用官网 / Cloudflare 加密中转通道（默认关闭，跨网或开代理时可选）</span>
+            </label>
+            ${
+              modal.relayEnabled
+                ? `
+              <div class="sync-privacy-note">不收集任何用户数据：每次同步均在本地随机生成一次性 256-bit 密钥进行 AES-256-GCM 端到端加密，密钥仅包含在二维码/同步串中，绝不上传服务端；服务端仅临时暂存纯密文，无法解密，3 分钟或拉取完成后立即销毁。</div>
+              <div class="sync-inline-row">
+                <input id="sync-relay-url" class="modal-input" maxlength="260" placeholder="官网或自建 Cloudflare Worker 地址（https://...）" value="${escapeHtml(modal.relayUrlDraft)}" autocomplete="off" spellcheck="false" ${busyAny ? "disabled" : ""} />
+                <button id="sync-lan-start-btn" class="btn primary" type="button" ${busyAny ? "disabled" : ""}>${modal.lanShareBusy ? "上传密文中..." : isRelayActive ? "重新生成" : "生成随机加密中转码"}</button>
+              </div>
+            `
+                : `
+              <div class="modal-hint">默认仅通过本地局域网点对点直连（3 分钟或最多 3 次拉取后自动关闭）。</div>
+              <div class="sync-inline-row">
+                <input id="sync-lan-share-pass" class="modal-input" maxlength="64" placeholder="同步口令（留空自动生成 6 位数字 PIN）" value="${escapeHtml(modal.lanSharePassDraft)}" autocomplete="off" spellcheck="false" ${busyAny ? "disabled" : ""} />
+                <button id="sync-lan-start-btn" class="btn primary" type="button" ${busyAny ? "disabled" : ""}>${modal.lanShareBusy ? "开启中..." : shareInfo && !isRelayActive ? "重新开启" : "开启共享"}</button>
+              </div>
+            `
+            }
+            ${
+              shareInfo
+                ? `
+              <div class="sync-qr-wrap">
+                <div class="sync-qr-box">${shareInfo.qrSvg}</div>
+                <div class="sync-meta-grid">
+                  <span class="sync-meta-label">${isRelayActive ? "中转通道" : "局域网地址"}</span>
+                  <span class="sync-meta-val">${escapeHtml(shareInfo.address)}</span>
+                  <span class="sync-meta-label">${isRelayActive ? "端到端加密" : "同步口令"}</span>
+                  <span class="sync-meta-val">${escapeHtml(shareInfo.passphrase)}</span>
+                  <span class="sync-meta-label">打包内容</span>
+                  <span>${shareInfo.accountCount} 个账号（含 ${shareInfo.cookieAccountCount} 个登录态）</span>
+                  <span class="sync-meta-label">${isRelayActive ? "销毁策略" : "有效期"}</span>
+                  <span>约 3 分钟 / 最多 ${shareInfo.maxDownloads} 次拉取${isRelayActive ? "后自动销毁" : ""}</span>
+                </div>
+                <div class="sync-ops-row">
+                  <button id="sync-lan-copy-uri-btn" class="mini-btn" type="button">复制同步串</button>
+                  <button id="sync-lan-stop-btn" class="mini-btn danger-btn" type="button">${isRelayActive ? "立即销毁并停止" : "停止共享"}</button>
+                </div>
+              </div>
+            `
+                : ""
+            }
+          </div>
+          <div class="sync-section">
+            <div class="sync-section-title">作为接收端（扫码或输入同步串拉取）</div>
+            ${
+              isMobilePlatform(state.platform)
+                ? `<button id="sync-lan-scan-btn" class="btn primary sync-scan-btn" type="button" ${busyAny ? "disabled" : ""}>${ICON_QR_SCAN}<span>${modal.lanScanBusy ? "正在识别并同步..." : "扫码直接同步"}</span></button>`
+                : ""
+            }
+            <input id="sync-lan-pull-addr" class="modal-input" maxlength="512" placeholder="输入局域网地址或粘贴 maam-sync:// 同步串（支持局域网与中转码）" value="${escapeHtml(modal.lanPullAddrDraft)}" autocomplete="off" spellcheck="false" ${busyAny ? "disabled" : ""} />
+            <div class="sync-inline-row">
+              <input id="sync-lan-pull-pass" class="modal-input" maxlength="128" placeholder="口令或二维码自动填入的端到端密钥片段" value="${escapeHtml(modal.lanPullPassDraft)}" autocomplete="off" spellcheck="false" ${busyAny ? "disabled" : ""} />
+              <button id="sync-lan-pull-btn" class="btn primary" type="button" ${busyAny ? "disabled" : ""}>${modal.lanPullBusy ? "拉取中..." : "拉取并合并"}</button>
+            </div>
+          </div>
+        `
+        : modal.tab === "webdav"
+          ? `
+          <div class="sync-section">
+            <div class="sync-section-title">WebDAV 服务器配置</div>
+            <div class="modal-hint">支持坚果云、Nextcloud、AList / OpenList、NAS 等标准 WebDAV（公网需使用 HTTPS，局域网可用 HTTP）。连接或同步成功后会自动记住地址与凭据。</div>
+            <input id="sync-webdav-url" class="modal-input" maxlength="512" placeholder="WebDAV 地址（如 https://dav.jianguoyun.com/dav/diehao/）" value="${escapeHtml(modal.webdavUrlDraft)}" autocomplete="off" spellcheck="false" ${busyAny ? "disabled" : ""} />
+            <div class="sync-inline-row">
+              <input id="sync-webdav-user" class="modal-input" maxlength="128" placeholder="用户名 / 邮箱" value="${escapeHtml(modal.webdavUserDraft)}" autocomplete="off" spellcheck="false" ${busyAny ? "disabled" : ""} />
+              <input id="sync-webdav-pass" class="modal-input" type="password" maxlength="256" placeholder="应用密码" value="${escapeHtml(modal.webdavPassDraft)}" autocomplete="off" ${busyAny ? "disabled" : ""} />
+            </div>
+            <div class="sync-inline-row">
+              <input id="sync-webdav-filename" class="modal-input" maxlength="128" placeholder="同步文件名（默认 maam-sync.maam）" value="${escapeHtml(modal.webdavFilenameDraft)}" autocomplete="off" spellcheck="false" ${busyAny ? "disabled" : ""} />
+              <button id="sync-webdav-test-btn" class="btn" type="button" ${busyAny ? "disabled" : ""}>${modal.webdavTestBusy ? "测试中..." : "测试连接"}</button>
+            </div>
+            ${modal.webdavHint ? `<div class="modal-hint">${escapeHtml(modal.webdavHint)}</div>` : ""}
+          </div>
+          <div class="sync-section">
+            <div class="sync-section-title">端到端加密上传与增量拉取</div>
+            <div class="sync-privacy-note">所有账号、时区、群聊与 Cookie（代理配置按上方开关决定）均在本地使用 AES-256-GCM 加密后上传，WebDAV 网盘仅保存密文（加密口令不会保存或上传）；拉取采用增量合并，不删除本机已有账号。</div>
+            <input id="sync-webdav-sync-pass" class="modal-input" type="password" maxlength="128" placeholder="设置/输入端到端加密口令（至少 4 位，两端需一致）" value="${escapeHtml(modal.webdavSyncPassDraft)}" autocomplete="off" ${busyAny ? "disabled" : ""} />
+            <div class="sync-ops-row">
+              <button id="sync-webdav-push-btn" class="btn primary" type="button" ${busyAny ? "disabled" : ""}>${modal.webdavPushBusy ? "加密上传中..." : "加密上传到 WebDAV"}</button>
+              <button id="sync-webdav-pull-btn" class="btn" type="button" ${busyAny ? "disabled" : ""}>${modal.webdavPullBusy ? "拉取解密中..." : "从 WebDAV 拉取并合并"}</button>
+            </div>
+          </div>
+        `
+          : `
+          <div class="sync-section">
+            <div class="sync-section-title">导出加密备份（.maam）</div>
+            <div class="modal-hint">AES-256-GCM 端到端加密包含所有账号、时区、群聊与 Cookie 登录态（代理配置按上方开关决定）。</div>
+            <div class="sync-inline-row">
+              <input id="sync-file-export-pass" class="modal-input" type="password" maxlength="128" placeholder="设置加密口令（至少 4 位）" value="${escapeHtml(modal.fileExportPassDraft)}" autocomplete="off" ${busyAny ? "disabled" : ""} />
+              <button id="sync-file-export-btn" class="btn primary" type="button" ${busyAny ? "disabled" : ""}>${modal.fileExportBusy ? "导出中..." : "导出备份"}</button>
+            </div>
+            ${
+              exportRes
+                ? `
+              <div class="modal-hint">已加密 ${exportRes.accountCount} 个账号（${exportRes.cookieAccountCount} 个含 Cookie）。${exportRes.savedPath ? `<br/>已保存：<code>${escapeHtml(exportRes.savedPath)}</code>` : ""}</div>
+              <div class="sync-ops-row">
+                ${exportRes.downloadId != null ? `<button id="sync-file-reveal-btn" class="mini-btn" type="button">打开文件位置</button>` : ""}
+                <button id="sync-file-download-btn" class="mini-btn" type="button">保存 .maam 文件</button>
+                <button id="sync-file-copy-btn" class="mini-btn" type="button">复制密文</button>
+              </div>
+            `
+                : ""
+            }
+          </div>
+          <div class="sync-section">
+            <div class="sync-section-title">导入并解密备份</div>
+            <input id="sync-file-picker" class="sync-file-input" type="file" accept=".maam,.json,application/json,text/plain" ${busyAny ? "disabled" : ""} />
+            ${modal.fileImportFileName ? `<div class="modal-hint">已读取文件：${escapeHtml(modal.fileImportFileName)}</div>` : ""}
+            <textarea id="sync-file-import-json" class="modal-textarea compact-cookie-textarea" rows="3" placeholder="或直接在此粘贴 .maam 加密备份全文" spellcheck="false" ${busyAny ? "disabled" : ""}>${escapeHtml(modal.fileImportJsonDraft)}</textarea>
+            <div class="sync-inline-row">
+              <input id="sync-file-import-pass" class="modal-input" type="password" maxlength="128" placeholder="输入备份时的解密口令" value="${escapeHtml(modal.fileImportPassDraft)}" autocomplete="off" ${busyAny ? "disabled" : ""} />
+              <button id="sync-file-import-btn" class="btn primary" type="button" ${busyAny ? "disabled" : ""}>${modal.fileImportBusy ? "导入中..." : "解密并导入"}</button>
+            </div>
+          </div>
+        `;
+    return `
+      <div class="${modalOverlayClass()}" role="dialog" aria-modal="true">
+        <div class="modal-card sync-modal-card">
+          <div class="modal-title">多端加密同步</div>
+          <div class="sync-tabs">
+            <button id="sync-tab-lan" class="sync-tab-btn ${modal.tab === "lan" ? "active" : ""}" type="button" ${busyAny ? "disabled" : ""}>扫码 / 局域网</button>
+            <button id="sync-tab-webdav" class="sync-tab-btn ${modal.tab === "webdav" ? "active" : ""}" type="button" ${busyAny ? "disabled" : ""}>WebDAV 云同步</button>
+            <button id="sync-tab-file" class="sync-tab-btn ${modal.tab === "file" ? "active" : ""}" type="button" ${busyAny ? "disabled" : ""}>加密备份文件</button>
+          </div>
+          <label class="sync-relay-toggle">
+            <input id="sync-include-proxy-toggle" type="checkbox" ${modal.includeProxy ? "checked" : ""} ${busyAny ? "disabled" : ""} />
+            <span>同步 / 导出时包含账号代理配置（默认关闭，跨设备建议关闭）</span>
+          </label>
+          ${syncAccountPickerHtml}
+          ${tabBody}
+          ${
+            summary
+              ? `<div class="sync-summary-box">同步成功：新增 ${summary.addedAccounts} 个账号，更新 ${summary.updatedAccounts} 个账号，写入 ${summary.importedCookieAccounts} 个登录态${summary.mergedGroups > 0 ? `，合并 ${summary.mergedGroups} 个群聊` : ""}${summary.skippedCookieAccounts > 0 ? `（${summary.skippedCookieAccounts} 个 Cookie 写入跳过）` : ""}</div>`
+              : ""
+          }
+          ${modal.copyHint ? `<div class="modal-hint">${escapeHtml(modal.copyHint)}</div>` : ""}
+          ${modal.error ? `<div id="modal-error-box" class="update-error-box" role="alert">${escapeHtml(modal.error)}</div>` : ""}
+          <div class="modal-footer">
+            <button id="modal-cancel-btn" class="btn" type="button" ${busyAny ? "disabled" : ""}>关闭</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
   if (modal.kind === "settings") {
     const saving = Boolean(modal.saving);
     if (isMobile) {
@@ -1356,6 +1615,12 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
         : state.settings.globalShortcut
           ? "未激活"
           : "已禁用";
+    const intervalPresets = [
+      { label: "5 分钟", val: 5 },
+      { label: "15 分钟", val: 15 },
+      { label: "30 分钟", val: 30 },
+      { label: "仅手动", val: 0 },
+    ];
     return `
       <div class="${modalOverlayClass()}" role="dialog" aria-modal="true">
         <div class="modal-card">
@@ -1369,6 +1634,26 @@ function renderModal(state: ManagerSnapshot, provider: ProviderInfo): string {
             <input id="modal-auto-approve-checkbox" class="setting-checkbox" type="checkbox" ${modal.autoApprove ? "checked" : ""} ${saving ? "disabled" : ""} />
           </label>
           <div class="modal-hint">开启后，已预热保活的工具授权弹窗将自动点击允许，并跳过删除/退出/支付等高危操作。</div>
+          <label class="setting-row" for="modal-isolate-proxy-checkbox">
+            <span class="setting-label">同代理仅保活当前账号（防多号同 IP 限流）</span>
+            <input id="modal-isolate-proxy-checkbox" class="setting-checkbox" type="checkbox" ${modal.isolateSameProxyKeepAlive ? "checked" : ""} ${saving ? "disabled" : ""} />
+          </label>
+          <div class="modal-hint">开启后，未配独立代理或共用同一代理的同平台账号仅保持当前活跃窗口，切号自动释放旧窗口；关闭则恢复全部后台预热保活。</div>
+          <div class="setting-field">
+            <div class="setting-field-head">
+              <label class="modal-desc" for="modal-sync-interval-input">后台静默保活 / 额度检测间隔（分钟）</label>
+            </div>
+            <input id="modal-sync-interval-input" class="modal-input" type="number" min="0" max="120" step="1" value="${escapeHtml(String(modal.silentSyncIntervalMins))}" ${saving ? "disabled" : ""} />
+            <div class="preset-chips">
+              ${intervalPresets
+                .map(
+                  (p) =>
+                    `<button class="preset-chip" data-sync-interval-preset="${p.val}" type="button" ${saving ? "disabled" : ""}>${escapeHtml(p.label)}</button>`
+                )
+                .join("")}
+            </div>
+            <div class="modal-hint">窗口切回与定时检查均受此间隔限制；设为 0 则仅手动刷新。</div>
+          </div>
           <div class="setting-field">
             <div class="setting-field-head">
               <label class="modal-desc" for="modal-shortcut-input">全局呼出 / 隐藏快捷键</label>
@@ -1903,6 +2188,7 @@ function renderMobileUtilityButtons(state: ManagerSnapshot): string {
       ? `<button id="settings-btn" class="ghost-icon-btn" type="button" title="应用设置">${ICON_SETTINGS}</button>`
       : "";
   return `
+    <button id="sync-btn" class="ghost-icon-btn" type="button" title="多端加密同步">${ICON_SYNC}</button>
     ${settingsBtn}
     <button id="theme-toggle-btn" class="ghost-icon-btn" type="button" title="主题：${themeLabel(themeMode)}（点击切换）">${themeIcon(themeMode)}</button>
     <button id="check-update-btn" class="ghost-icon-btn update-trigger-btn ${hasUpdate ? "has-update" : ""}" type="button" title="${hasUpdate ? `发现新版本 v${escapeHtml(updateState.result!.latestVersion)}` : "检查更新"}">${ICON_UPDATE}${hasUpdate ? `<span class="update-dot"></span>` : ""}</button>
@@ -3105,6 +3391,15 @@ function render(): void {
           </div>
           <div class="rail-footer">
             <button
+              id="sync-btn"
+              class="rail-util-btn"
+              title="跨设备多端加密同步"
+              type="button"
+            >
+              ${ICON_SYNC}
+              <span class="rail-util-label">同步</span>
+            </button>
+            <button
               id="settings-btn"
               class="rail-util-btn ${snapshot.globalShortcutError ? "has-warn" : ""}"
               title="${snapshot.globalShortcutError ? escapeHtml(snapshot.globalShortcutError) : "托盘常驻与全局快捷键设置"}"
@@ -3874,7 +4169,586 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
       minimizeToTray: state.settings.minimizeToTray,
       globalShortcut: state.settings.globalShortcut,
       autoApprove: Boolean(state.settings.autoApprove),
+      isolateSameProxyKeepAlive: state.settings.isolateSameProxyKeepAlive ?? true,
+      silentSyncIntervalMins: state.settings.silentSyncIntervalMins ?? 15,
     });
+  });
+
+  document.querySelector("#sync-btn")?.addEventListener("click", async () => {
+    if (modal.kind !== "none") return;
+    let savedRelay = "";
+    try {
+      savedRelay = localStorage.getItem("maam_sync_relay_url") || "";
+    } catch {
+    }
+    await setModal({
+      kind: "sync",
+      tab: "lan",
+      includeProxy: false,
+      selectedAccountKeys: state.accounts.map((a) => `${a.providerId}:${a.uuid}`),
+      accountPickerExpanded: false,
+      relayEnabled: false,
+      relayUrlDraft: savedRelay || snapshot?.officialRelayUrl || "",
+      lanSharePassDraft: "",
+      lanShareInfo: null,
+      lanPullAddrDraft: "",
+      lanPullPassDraft: "",
+      webdavUrlDraft: state.settings.webdav?.url ?? "",
+      webdavUserDraft: state.settings.webdav?.username ?? "",
+      webdavPassDraft: state.settings.webdav?.password ?? "",
+      webdavFilenameDraft: state.settings.webdav?.filename || "maam-sync.maam",
+      webdavSyncPassDraft: "",
+      webdavHint: undefined,
+      fileExportPassDraft: "",
+      fileExportResult: null,
+      fileImportJsonDraft: "",
+      fileImportPassDraft: "",
+      importSummary: null,
+    });
+  });
+
+  document.querySelector("#sync-account-picker-toggle")?.addEventListener("click", () => {
+    if (modal.kind !== "sync") return;
+    modal.accountPickerExpanded = !modal.accountPickerExpanded;
+    render();
+  });
+
+  document.querySelector("#sync-account-select-all")?.addEventListener("click", () => {
+    if (modal.kind !== "sync") return;
+    modal.selectedAccountKeys = state.accounts.map((a) => `${a.providerId}:${a.uuid}`);
+    modal.error = undefined;
+    render();
+  });
+
+  document.querySelector("#sync-account-select-none")?.addEventListener("click", () => {
+    if (modal.kind !== "sync") return;
+    modal.selectedAccountKeys = [];
+    modal.error = undefined;
+    render();
+  });
+
+  document.querySelectorAll<HTMLInputElement>(".sync-account-pick-cb").forEach((cb) => {
+    cb.addEventListener("change", (ev) => {
+      if (modal.kind !== "sync") return;
+      const el = ev.currentTarget as HTMLInputElement;
+      const key = (el.dataset.accountKey || "").trim();
+      if (!key) return;
+      const lower = key.toLowerCase();
+      const next = modal.selectedAccountKeys.filter((k) => k.toLowerCase() !== lower);
+      if (el.checked) {
+        next.push(key);
+      }
+      modal.selectedAccountKeys = next;
+      modal.error = undefined;
+      const countEl = document.querySelector("#sync-account-picker-count");
+      if (countEl) {
+        const set = new Set(next.map((k) => k.toLowerCase()));
+        const total = state.accounts.length;
+        const selected = state.accounts.filter((a) =>
+          set.has(`${a.providerId}:${a.uuid}`.toLowerCase())
+        ).length;
+        countEl.textContent =
+          selected === total ? `同步 / 导出账号：全部 ${total} 个` : `同步 / 导出账号：已选 ${selected} / ${total} 个`;
+      }
+    });
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-include-proxy-toggle")?.addEventListener("change", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.includeProxy = Boolean((ev.currentTarget as HTMLInputElement).checked);
+    modal.error = undefined;
+    modal.copyHint = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-relay-toggle")?.addEventListener("change", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.relayEnabled = Boolean((ev.currentTarget as HTMLInputElement).checked);
+    modal.error = undefined;
+    modal.copyHint = undefined;
+    render();
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-relay-url")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    const val = (ev.currentTarget as HTMLInputElement).value;
+    modal.relayUrlDraft = val;
+    try {
+      const trimmed = val.trim();
+      if (trimmed) {
+        localStorage.setItem("maam_sync_relay_url", trimmed);
+      } else {
+        localStorage.removeItem("maam_sync_relay_url");
+      }
+    } catch {
+    }
+    modal.error = undefined;
+  });
+
+  document.querySelector("#sync-tab-lan")?.addEventListener("click", () => {
+    if (modal.kind !== "sync") return;
+    modal.tab = "lan";
+    modal.error = undefined;
+    modal.copyHint = undefined;
+    modal.webdavHint = undefined;
+    render();
+  });
+
+  document.querySelector("#sync-tab-webdav")?.addEventListener("click", () => {
+    if (modal.kind !== "sync") return;
+    modal.tab = "webdav";
+    modal.error = undefined;
+    modal.copyHint = undefined;
+    modal.webdavHint = undefined;
+    render();
+  });
+
+  document.querySelector("#sync-tab-file")?.addEventListener("click", () => {
+    if (modal.kind !== "sync") return;
+    modal.tab = "file";
+    modal.error = undefined;
+    modal.copyHint = undefined;
+    modal.webdavHint = undefined;
+    render();
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-webdav-url")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.webdavUrlDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+    modal.webdavHint = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-webdav-user")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.webdavUserDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-webdav-pass")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.webdavPassDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-webdav-filename")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.webdavFilenameDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-webdav-sync-pass")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.webdavSyncPassDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+  });
+
+  document.querySelector("#sync-webdav-test-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync" || cur.webdavTestBusy) return;
+    cur.webdavTestBusy = true;
+    cur.error = undefined;
+    cur.webdavHint = undefined;
+    render();
+    try {
+      const res = await invoke<WebDavTestResult>("test_webdav_sync", {
+        url: cur.webdavUrlDraft.trim(),
+        username: cur.webdavUserDraft.trim(),
+        password: cur.webdavPassDraft,
+        filename: cur.webdavFilenameDraft.trim() || null,
+      });
+      if (modal === cur) {
+        cur.webdavHint = res.message;
+      }
+    } catch (err) {
+      if (modal === cur) cur.error = String(err);
+    } finally {
+      if (modal === cur) {
+        cur.webdavTestBusy = false;
+        render();
+      }
+    }
+  });
+
+  document.querySelector("#sync-webdav-push-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync" || cur.webdavPushBusy || cur.webdavPullBusy) return;
+    if ((snapshot?.accounts.length ?? 0) > 0 && cur.selectedAccountKeys.length === 0) {
+      cur.error = "请至少选择一个要同步的账号";
+      render();
+      return;
+    }
+    cur.webdavPushBusy = true;
+    cur.error = undefined;
+    cur.webdavHint = undefined;
+    cur.importSummary = null;
+    render();
+    try {
+      const res = await invoke<WebDavPushResult>("push_webdav_sync", {
+        url: cur.webdavUrlDraft.trim(),
+        username: cur.webdavUserDraft.trim(),
+        password: cur.webdavPassDraft,
+        filename: cur.webdavFilenameDraft.trim() || null,
+        passphrase: cur.webdavSyncPassDraft,
+        includeProxy: cur.includeProxy,
+        accountKeys: cur.selectedAccountKeys,
+      });
+      if (modal === cur) {
+        const kb = Math.max(1, Math.round(res.sizeBytes / 1024));
+        cur.webdavHint = `已加密上传 ${res.accountCount} 个账号（含 ${res.cookieAccountCount} 个登录态，约 ${kb} KB）至 WebDAV`;
+      }
+    } catch (err) {
+      if (modal === cur) cur.error = String(err);
+    } finally {
+      if (modal === cur) {
+        cur.webdavPushBusy = false;
+        render();
+      }
+    }
+  });
+
+  document.querySelector("#sync-webdav-pull-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync" || cur.webdavPullBusy || cur.webdavPushBusy) return;
+    cur.webdavPullBusy = true;
+    cur.error = undefined;
+    cur.webdavHint = undefined;
+    cur.importSummary = null;
+    render();
+    try {
+      const res = await invoke<ImportSyncBundleResponse>("pull_webdav_sync", {
+        url: cur.webdavUrlDraft.trim(),
+        username: cur.webdavUserDraft.trim(),
+        password: cur.webdavPassDraft,
+        filename: cur.webdavFilenameDraft.trim() || null,
+        passphrase: cur.webdavSyncPassDraft,
+        includeProxy: cur.includeProxy,
+      });
+      snapshot = res.snapshot;
+      syncViewModeFromSnapshot(snapshot);
+      if (modal === cur) {
+        cur.importSummary = res.summary;
+      }
+    } catch (err) {
+      if (modal === cur) cur.error = String(err);
+    } finally {
+      if (modal === cur) {
+        cur.webdavPullBusy = false;
+        render();
+      }
+    }
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-lan-share-pass")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.lanSharePassDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-lan-pull-addr")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    const val = (ev.currentTarget as HTMLInputElement).value;
+    modal.lanPullAddrDraft = val;
+    const hashIdx = val.indexOf("#");
+    if (val.trim().startsWith("maam-sync://") && hashIdx > 0) {
+      const addrPart = val.slice(0, hashIdx).trim();
+      const frag = val.slice(hashIdx + 1).trim();
+      if (frag) {
+        try {
+          modal.lanPullAddrDraft = addrPart;
+          modal.lanPullPassDraft = decodeURIComponent(frag);
+          (ev.currentTarget as HTMLInputElement).value = modal.lanPullAddrDraft;
+          const passEl = document.querySelector<HTMLInputElement>("#sync-lan-pull-pass");
+          if (passEl) passEl.value = modal.lanPullPassDraft;
+        } catch {
+        }
+      }
+    }
+    modal.error = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-lan-pull-pass")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.lanPullPassDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-file-export-pass")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.fileExportPassDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-file-import-pass")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.fileImportPassDraft = (ev.currentTarget as HTMLInputElement).value;
+    modal.error = undefined;
+  });
+
+  document.querySelector<HTMLTextAreaElement>("#sync-file-import-json")?.addEventListener("input", (ev) => {
+    if (modal.kind !== "sync") return;
+    modal.fileImportJsonDraft = (ev.currentTarget as HTMLTextAreaElement).value;
+    modal.error = undefined;
+  });
+
+  document.querySelector<HTMLInputElement>("#sync-file-picker")?.addEventListener("change", async (ev) => {
+    const cur = modal;
+    if (cur.kind !== "sync") return;
+    const inputEl = ev.currentTarget as HTMLInputElement;
+    const file = inputEl.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      if (modal !== cur) return;
+      cur.fileImportFileName = file.name;
+      cur.fileImportJsonDraft = text;
+      cur.error = undefined;
+      render();
+    } catch (err) {
+      if (modal !== cur) return;
+      cur.error = `读取备份文件失败: ${String(err)}`;
+      render();
+    }
+  });
+
+  document.querySelector("#sync-lan-start-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync" || cur.lanShareBusy) return;
+    if ((snapshot?.accounts.length ?? 0) > 0 && cur.selectedAccountKeys.length === 0) {
+      cur.error = "请至少选择一个要同步的账号";
+      render();
+      return;
+    }
+    cur.lanShareBusy = true;
+    cur.error = undefined;
+    cur.copyHint = undefined;
+    render();
+    try {
+      const info = cur.relayEnabled
+        ? await invoke<LanSyncShareInfo>("start_relay_sync_share", {
+            relayUrl: cur.relayUrlDraft.trim() || null,
+            includeProxy: cur.includeProxy,
+            accountKeys: cur.selectedAccountKeys,
+          })
+        : await invoke<LanSyncShareInfo>("start_lan_sync_share", {
+            passphrase: cur.lanSharePassDraft.trim() || null,
+            includeProxy: cur.includeProxy,
+            accountKeys: cur.selectedAccountKeys,
+          });
+      if (modal === cur) {
+        cur.lanShareInfo = info;
+      }
+    } catch (err) {
+      if (modal === cur) cur.error = String(err);
+    } finally {
+      if (modal === cur) {
+        cur.lanShareBusy = false;
+        render();
+      }
+    }
+  });
+
+  document.querySelector("#sync-lan-stop-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync") return;
+    await invoke("stop_lan_sync_share").catch(() => {});
+    if (modal === cur) {
+      cur.lanShareInfo = null;
+      cur.copyHint = undefined;
+      render();
+    }
+  });
+
+  document.querySelector("#sync-lan-copy-uri-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync" || !cur.lanShareInfo) return;
+    try {
+      await navigator.clipboard.writeText(cur.lanShareInfo.syncUri);
+      cur.copyHint = "已复制同步串（可在另一台设备地址栏直接粘贴）";
+    } catch {
+      cur.copyHint = "复制失败，请手动抄录地址与口令";
+    }
+    render();
+  });
+
+  document.querySelector("#sync-lan-scan-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync" || cur.lanScanBusy || cur.lanPullBusy) return;
+    cur.lanScanBusy = true;
+    cur.error = undefined;
+    cur.copyHint = undefined;
+    cur.importSummary = null;
+    render();
+    try {
+      const scanned = await invoke<ScanQrResult>("scan_sync_qr_code");
+      if (modal !== cur || scanned.cancelled) return;
+      const raw = (scanned.content || "").trim();
+      if (!raw) {
+        cur.error = "未识别到有效的同步二维码内容";
+        return;
+      }
+      let parsedAddr = raw;
+      let parsedPass = cur.lanPullPassDraft.trim();
+      const hashIdx = raw.indexOf("#");
+      if (hashIdx > 0) {
+        parsedAddr = raw.slice(0, hashIdx).trim();
+        const frag = raw.slice(hashIdx + 1).trim();
+        if (frag) {
+          try {
+            parsedPass = decodeURIComponent(frag);
+          } catch {
+            parsedPass = frag;
+          }
+        }
+      }
+      cur.lanPullAddrDraft = parsedAddr;
+      if (parsedPass) {
+        cur.lanPullPassDraft = parsedPass;
+      }
+      if (!parsedPass) {
+        cur.copyHint = "已识别同步地址，请补充输入口令后点击「拉取并合并」";
+        return;
+      }
+      cur.lanPullBusy = true;
+      render();
+      const res = await invoke<ImportSyncBundleResponse>("pull_lan_sync_share", {
+        address: parsedAddr,
+        passphrase: parsedPass,
+        includeProxy: cur.includeProxy,
+      });
+      snapshot = res.snapshot;
+      syncViewModeFromSnapshot(snapshot);
+      if (modal === cur) {
+        cur.importSummary = res.summary;
+      }
+    } catch (err) {
+      if (modal === cur) cur.error = String(err);
+    } finally {
+      if (modal === cur) {
+        cur.lanScanBusy = false;
+        cur.lanPullBusy = false;
+        render();
+      }
+    }
+  });
+
+  document.querySelector("#sync-lan-pull-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync" || cur.lanPullBusy) return;
+    cur.lanPullBusy = true;
+    cur.error = undefined;
+    cur.importSummary = null;
+    render();
+    try {
+      const res = await invoke<ImportSyncBundleResponse>("pull_lan_sync_share", {
+        address: cur.lanPullAddrDraft.trim(),
+        passphrase: cur.lanPullPassDraft.trim(),
+        includeProxy: cur.includeProxy,
+      });
+      snapshot = res.snapshot;
+      syncViewModeFromSnapshot(snapshot);
+      if (modal === cur) {
+        cur.importSummary = res.summary;
+      }
+    } catch (err) {
+      if (modal === cur) cur.error = String(err);
+    } finally {
+      if (modal === cur) {
+        cur.lanPullBusy = false;
+        render();
+      }
+    }
+  });
+
+  document.querySelector("#sync-file-export-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync" || cur.fileExportBusy) return;
+    if ((snapshot?.accounts.length ?? 0) > 0 && cur.selectedAccountKeys.length === 0) {
+      cur.error = "请至少选择一个要同步的账号";
+      render();
+      return;
+    }
+    cur.fileExportBusy = true;
+    cur.error = undefined;
+    cur.copyHint = undefined;
+    render();
+    try {
+      const res = await invoke<ExportSyncBundleResponse>("export_sync_bundle", {
+        passphrase: cur.fileExportPassDraft,
+        includeProxy: cur.includeProxy,
+        accountKeys: cur.selectedAccountKeys,
+      });
+      if (modal === cur) {
+        cur.fileExportResult = res;
+      }
+    } catch (err) {
+      if (modal === cur) cur.error = String(err);
+    } finally {
+      if (modal === cur) {
+        cur.fileExportBusy = false;
+        render();
+      }
+    }
+  });
+
+  document.querySelector("#sync-file-reveal-btn")?.addEventListener("click", async () => {
+    if (modal.kind !== "sync" || modal.fileExportResult?.downloadId == null) return;
+    await invoke("reveal_downloaded_file", {
+      downloadId: modal.fileExportResult.downloadId,
+    }).catch(() => {});
+  });
+
+  document.querySelector("#sync-file-download-btn")?.addEventListener("click", () => {
+    if (modal.kind !== "sync" || !modal.fileExportResult) return;
+    const res = modal.fileExportResult;
+    const blob = new Blob([res.bundleJson], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = res.filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  document.querySelector("#sync-file-copy-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync" || !cur.fileExportResult) return;
+    try {
+      await navigator.clipboard.writeText(cur.fileExportResult.bundleJson);
+      cur.copyHint = "已复制密文备份内容";
+    } catch {
+      cur.copyHint = "复制失败，请点击保存 .maam 文件";
+    }
+    render();
+  });
+
+  document.querySelector("#sync-file-import-btn")?.addEventListener("click", async () => {
+    const cur = modal;
+    if (cur.kind !== "sync" || cur.fileImportBusy) return;
+    cur.fileImportBusy = true;
+    cur.error = undefined;
+    cur.importSummary = null;
+    render();
+    try {
+      const res = await invoke<ImportSyncBundleResponse>("import_sync_bundle", {
+        bundleJson: cur.fileImportJsonDraft,
+        passphrase: cur.fileImportPassDraft,
+        includeProxy: cur.includeProxy,
+      });
+      snapshot = res.snapshot;
+      syncViewModeFromSnapshot(snapshot);
+      if (modal === cur) {
+        cur.importSummary = res.summary;
+      }
+    } catch (err) {
+      if (modal === cur) cur.error = String(err);
+    } finally {
+      if (modal === cur) {
+        cur.fileImportBusy = false;
+        render();
+      }
+    }
   });
 
   document.querySelector("#smart-switch-btn")?.addEventListener("click", async () => {
@@ -4325,6 +5199,33 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
     if (modal.kind === "settings") {
       modal.autoApprove = (ev.currentTarget as HTMLInputElement).checked;
     }
+  });
+
+  document.querySelector<HTMLInputElement>("#modal-isolate-proxy-checkbox")?.addEventListener("change", (ev) => {
+    if (modal.kind === "settings") {
+      modal.isolateSameProxyKeepAlive = (ev.currentTarget as HTMLInputElement).checked;
+    }
+  });
+
+  document.querySelector<HTMLInputElement>("#modal-sync-interval-input")?.addEventListener("input", (ev) => {
+    if (modal.kind === "settings") {
+      const parsed = Number.parseInt((ev.currentTarget as HTMLInputElement).value, 10);
+      modal.silentSyncIntervalMins = Number.isFinite(parsed)
+        ? Math.min(120, Math.max(0, parsed))
+        : 0;
+    }
+  });
+
+  document.querySelectorAll<HTMLElement>("[data-sync-interval-preset]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (modal.kind !== "settings" || modal.saving) return;
+      const parsed = Number.parseInt(btn.dataset.syncIntervalPreset ?? "15", 10);
+      modal.silentSyncIntervalMins = Number.isFinite(parsed)
+        ? Math.min(120, Math.max(0, parsed))
+        : 15;
+      const input = document.querySelector<HTMLInputElement>("#modal-sync-interval-input");
+      if (input) input.value = String(modal.silentSyncIntervalMins);
+    });
   });
 
   document.querySelector<HTMLTextAreaElement>("#modal-cookie-import-input")?.addEventListener("input", (ev) => {
@@ -4894,6 +5795,16 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
   document.querySelector("#modal-cancel-btn")?.addEventListener("click", async () => {
     if (modal.kind === "update" && updateState.installing) return;
     if (
+      modal.kind === "sync" &&
+      (modal.lanShareBusy ||
+        modal.lanPullBusy ||
+        modal.lanScanBusy ||
+        modal.fileExportBusy ||
+        modal.fileImportBusy)
+    ) {
+      return;
+    }
+    if (
       (modal.kind === "add" ||
         modal.kind === "rename" ||
         modal.kind === "group" ||
@@ -4956,6 +5867,8 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
           minimizeToTray: currentModal.minimizeToTray,
           globalShortcut: currentModal.globalShortcut.trim(),
           autoApprove: currentModal.autoApprove,
+          isolateSameProxyKeepAlive: currentModal.isolateSameProxyKeepAlive,
+          silentSyncIntervalMins: currentModal.silentSyncIntervalMins,
         });
       } finally {
         currentModal.saving = false;
@@ -5178,6 +6091,14 @@ async function bootstrap(): Promise<void> {
         !(modal.kind === "group-knowledge" && modal.saving) &&
         !(modal.kind === "external-agents" && modal.saving) &&
         !(modal.kind === "settings" && modal.saving) &&
+        !(
+          modal.kind === "sync" &&
+          (modal.lanShareBusy ||
+            modal.lanPullBusy ||
+            modal.lanScanBusy ||
+            modal.fileExportBusy ||
+            modal.fileImportBusy)
+        ) &&
         !(modal.kind === "update" && updateState.installing)
       ) {
         ev.preventDefault();

@@ -48,6 +48,27 @@ private struct ImportProfileCookiesArgs: Decodable {
   let cookies: [String]
 }
 
+private struct ExportProfileCookiesArgs: Decodable {
+  let uuid: String
+  let allowedHosts: [String]
+  let urls: [String]?
+}
+
+private struct ExportedCookieItem: Encodable {
+  let name: String
+  let value: String
+  let domain: String
+  let path: String
+  let secure: Bool
+  let httpOnly: Bool
+  let sameSite: String?
+  let maxAgeSecs: Int64?
+}
+
+private struct ExportProfileCookiesResult: Encodable {
+  let cookies: [ExportedCookieItem]
+}
+
 private struct OpenExternalUrlArgs: Decodable {
   let url: String
 }
@@ -93,6 +114,13 @@ private struct SetAutoApproveArgs: Decodable {
   let autoApprove: Bool
 }
 
+private struct HttpRequestArgs: Decodable {
+  let method: String
+  let url: String
+  let headers: [String: String]?
+  let body: String?
+}
+
 private struct CapabilitiesResult: Encodable {
   let multiProfileSupported: Bool
   let profileNames: [String]
@@ -120,6 +148,11 @@ private struct GroupWebviewStateResult: Encodable {
   let exists: Bool
   let viewInstanceId: UInt64
   let url: String?
+}
+
+private struct ScanQrCodeResult: Encodable {
+  let content: String
+  let cancelled: Bool
 }
 
 @_cdecl("init_plugin_account_session")
@@ -328,6 +361,55 @@ public class AccountSessionPlugin: Plugin {
       }
     } catch {
       invoke.reject("导入 Cookie 失败: \(error.localizedDescription)")
+    }
+  }
+
+  @objc public func exportProfileCookies(_ invoke: Invoke) {
+    do {
+      let args = try invoke.parseArgs(ExportProfileCookiesArgs.self)
+      guard let parsedUuid = UUID(uuidString: args.uuid) else {
+        invoke.reject("账号资料标识无效")
+        return
+      }
+      let allowed = args.allowedHosts
+        .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() }
+        .filter { !$0.isEmpty }
+      IosProfileStoreManager.shared.getAllCookies(uuid: parsedUuid) { cookies in
+        let now = Date()
+        var items: [ExportedCookieItem] = []
+        for cookie in cookies {
+          if let exp = cookie.expiresDate, exp <= now {
+            continue
+          }
+          let rawDomain = cookie.domain.lowercased()
+          let normDomain = rawDomain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+          if normDomain.isEmpty { continue }
+          let matched = allowed.isEmpty || allowed.contains { ah in
+            normDomain == ah || normDomain.hasSuffix("." + ah) || ah.hasSuffix("." + normDomain)
+          }
+          if !matched { continue }
+          var maxAge: Int64? = nil
+          if let exp = cookie.expiresDate {
+            let secs = Int64(exp.timeIntervalSince(now))
+            if secs > 0 {
+              maxAge = min(secs, 365 * 86400)
+            }
+          }
+          items.append(ExportedCookieItem(
+            name: cookie.name,
+            value: cookie.value,
+            domain: rawDomain.hasPrefix(".") ? rawDomain : normDomain,
+            path: cookie.path.isEmpty ? "/" : cookie.path,
+            secure: cookie.isSecure,
+            httpOnly: cookie.isHTTPOnly,
+            sameSite: cookie.sameSitePolicy?.rawValue,
+            maxAgeSecs: maxAge
+          ))
+        }
+        invoke.resolve(ExportProfileCookiesResult(cookies: items))
+      }
+    } catch {
+      invoke.reject("导出 Cookie 失败: \(error.localizedDescription)")
     }
   }
 
@@ -545,6 +627,109 @@ public class AccountSessionPlugin: Plugin {
     }
   }
 
+  @objc public func httpRequest(_ invoke: Invoke) {
+    do {
+      let args = try invoke.parseArgs(HttpRequestArgs.self)
+      let method = args.method.uppercased()
+      let allowedMethods: Set<String> = ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "MKCOL", "PROPFIND"]
+      guard allowedMethods.contains(method) else {
+        invoke.reject("不支持的 HTTP 方法")
+        return
+      }
+      guard let url = URL(string: args.url),
+            let scheme = url.scheme?.lowercased() else {
+        invoke.reject("无效的网络请求地址")
+        return
+      }
+      let allowLocalHttp = scheme == "http" && Self.isPrivateOrLocalHost(url.host ?? "")
+      guard scheme == "https" || allowLocalHttp else {
+        invoke.reject("仅允许 HTTPS 或局域网内网 WebDAV 地址")
+        return
+      }
+      var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+      req.httpMethod = method
+      if let headers = args.headers {
+        for (k, v) in headers {
+          req.setValue(v, forHTTPHeaderField: k)
+        }
+      }
+      if let body = args.body, method == "POST" || method == "PUT" {
+        req.httpBody = body.data(using: .utf8)
+      }
+
+      let delegate = NoRedirectDelegate()
+      let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+      let task = session.dataTask(with: req) { data, response, err in
+        session.finishTasksAndInvalidate()
+        if let err = err {
+          invoke.reject("网络请求失败: \(err.localizedDescription)")
+          return
+        }
+        guard let httpResp = response as? HTTPURLResponse else {
+          invoke.reject("无效的 HTTP 响应")
+          return
+        }
+        if !allowLocalHttp && httpResp.url?.scheme?.lowercased() != "https" {
+          invoke.reject("响应重定向到了非 HTTPS 地址")
+          return
+        }
+        let payload = data ?? Data()
+        if payload.count > 16 * 1024 * 1024 {
+          invoke.reject("响应内容过大")
+          return
+        }
+        let body = String(data: payload, encoding: .utf8) ?? ""
+        invoke.resolve(FetchTextResult(status: UInt16(httpResp.statusCode), body: body))
+      }
+      task.resume()
+    } catch {
+      invoke.reject("解析网络请求参数失败")
+    }
+  }
+
+  private static func isPrivateOrLocalHost(_ host: String) -> Bool {
+    let lower = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if lower == "localhost" || lower.hasSuffix(".local") || lower == "127.0.0.1" || lower == "::1" || lower == "[::1]" {
+      return true
+    }
+    let parts = lower.split(separator: ".").compactMap { Int($0) }
+    guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else {
+      return false
+    }
+    if parts[0] == 10 || parts[0] == 127 {
+      return true
+    }
+    if parts[0] == 192 && parts[1] == 168 {
+      return true
+    }
+    if parts[0] == 172 && (16...31).contains(parts[1]) {
+      return true
+    }
+    if parts[0] == 169 && parts[1] == 254 {
+      return true
+    }
+    return false
+  }
+
+  @objc public func scanQrCode(_ invoke: Invoke) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self, let presenter = self.resolvePresenterViewController() else {
+        invoke.reject("无法打开扫码界面")
+        return
+      }
+      let vc = QrScannerViewController { content, cancelled, error in
+        if let error = error {
+          invoke.reject(error)
+        } else if cancelled {
+          invoke.resolve(ScanQrCodeResult(content: "", cancelled: true))
+        } else {
+          invoke.resolve(ScanQrCodeResult(content: content ?? "", cancelled: false))
+        }
+      }
+      presenter.present(vc, animated: true)
+    }
+  }
+
   private func resolvePresenterViewController() -> UIViewController? {
     var topVC: UIViewController? = manager.viewController
     if topVC == nil {
@@ -572,6 +757,18 @@ public class AccountSessionPlugin: Plugin {
       }
     }
     return fallback
+  }
+}
+
+private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate {
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest,
+    completionHandler: @escaping (URLRequest?) -> Void
+  ) {
+    completionHandler(nil)
   }
 }
 
